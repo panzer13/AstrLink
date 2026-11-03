@@ -18,6 +18,7 @@ import (
 
 	"github.com/QuantumNous/astrlink/core/contract"
 	"github.com/QuantumNous/astrlink/core/internal/accountauth"
+	"github.com/QuantumNous/astrlink/core/internal/claudecli"
 	"github.com/QuantumNous/astrlink/core/internal/codingplan"
 	"github.com/QuantumNous/astrlink/core/internal/providerapi"
 	"github.com/QuantumNous/astrlink/core/internal/secretstore"
@@ -45,6 +46,9 @@ type serviceCreateRequest struct {
 	Models                    json.RawMessage         `json:"models,omitempty"`
 	HTTP                      json.RawMessage         `json:"http,omitempty"`
 	Capabilities              json.RawMessage         `json:"capabilities,omitempty"`
+	// SubscriptionMode picks how a Claude subscription signs in; without it a
+	// new Claude subscription is official.
+	SubscriptionMode *contract.SubscriptionMode `json:"subscription_mode,omitempty"`
 }
 
 type serviceHTTPInput struct {
@@ -61,11 +65,16 @@ type servicePageResponse struct {
 }
 
 func (handler *Handler) publicService(service contract.Service) contract.Service {
-	if handler.subscriptions == nil || !service.Kind.IsSubscription() || service.Subscription == nil {
+	if !service.Kind.IsSubscription() || service.Subscription == nil {
 		return service
 	}
 	connection := *service.Subscription
-	connection.AuthorizationBoundary = handler.subscriptions.AuthorizationBoundary()
+	// The stored plan only places the account in a package, and packages are
+	// read from their own route.
+	connection.PlanType = ""
+	if handler.subscriptions != nil {
+		connection.AuthorizationBoundary = handler.subscriptions.AuthorizationBoundary()
+	}
 	service.Subscription = &connection
 	return service
 }
@@ -355,6 +364,10 @@ func (handler *Handler) createService(writer http.ResponseWriter, request *http.
 		return
 	}
 	service.Models = models
+	if input.SubscriptionMode != nil && !input.Kind.IsSubscription() {
+		writeError(writer, http.StatusUnprocessableEntity, "invalid_service", "subscription_mode is only valid for subscription services")
+		return
+	}
 	credential := storage.CredentialMutation{}
 	switch {
 	case input.Kind.IsSubscription():
@@ -379,9 +392,15 @@ func (handler *Handler) createService(writer http.ResponseWriter, request *http.
 			}
 			service.Capabilities = capabilities
 		}
+		mode, ok := newSubscriptionMode(input.Kind.SubscriptionProvider(), input.SubscriptionMode)
+		if !ok {
+			writeError(writer, http.StatusUnprocessableEntity, "invalid_service", "subscription_mode is unsupported by this provider")
+			return
+		}
 		service.Subscription = &contract.SubscriptionConnection{
 			Provider:              input.Kind.SubscriptionProvider(),
 			Status:                contract.SubscriptionStatusDisconnected,
+			Mode:                  mode,
 			AuthorizationBoundary: handler.subscriptions.AuthorizationBoundary(),
 		}
 	case input.Kind.IsHTTP():
@@ -515,11 +534,19 @@ func (handler *Handler) serviceAuthorization(writer http.ResponseWriter, request
 	}
 	switch request.Method {
 	case http.MethodPost:
-		flow, ok := decodeAuthorizationFlow(writer, request)
+		var mode contract.SubscriptionMode
+		if current.Service.Subscription != nil {
+			mode = current.Service.Subscription.Mode
+		}
+		defaultFlow := contract.AuthorizationFlowBrowser
+		if mode == contract.SubscriptionModeOfficial {
+			defaultFlow = contract.AuthorizationFlowClaudeCLI
+		}
+		flow, ok := decodeAuthorizationFlow(writer, request, defaultFlow)
 		if !ok {
 			return
 		}
-		if !flow.SupportedBy(current.Service.Kind.SubscriptionProvider()) {
+		if !flow.SupportedByMode(current.Service.Kind.SubscriptionProvider(), mode) {
 			writeError(writer, http.StatusUnprocessableEntity, "invalid_authorization_flow", "authorization flow is unsupported by this provider")
 			return
 		}
@@ -556,6 +583,14 @@ func (handler *Handler) serviceAuthorization(writer http.ResponseWriter, request
 					accountauth.ErrCodeDeviceCodeRequest,
 					"OpenAI Device Code login could not be started",
 				)
+			case errors.Is(err, claudecli.ErrNotInstalled):
+				writeError(writer, http.StatusUnprocessableEntity, claudecli.ErrCodeNotInstalled, "Claude Code is not installed")
+			case errors.Is(err, claudecli.ErrTooOld):
+				writeError(writer, http.StatusUnprocessableEntity, claudecli.ErrCodeCLITooOld, sanitizeSubscriptionError(err))
+			case errors.Is(err, claudecli.ErrLoginNoURL):
+				writeError(writer, http.StatusBadGateway, claudecli.ErrCodeLoginNoURL, sanitizeSubscriptionError(err))
+			case errors.Is(err, subscription.ErrOfficialUnavailable):
+				writeError(writer, http.StatusServiceUnavailable, "subscription_unavailable", "official Claude accounts are unavailable")
 			default:
 				writeError(writer, http.StatusConflict, "authorization_busy", sanitizeSubscriptionError(err))
 			}
@@ -610,6 +645,7 @@ func (handler *Handler) serviceAuthorization(writer http.ResponseWriter, request
 func decodeAuthorizationFlow(
 	writer http.ResponseWriter,
 	request *http.Request,
+	defaultFlow contract.AuthorizationFlow,
 ) (contract.AuthorizationFlow, bool) {
 	request.Body = http.MaxBytesReader(writer, request.Body, maxControlBodyBytes)
 	raw, err := io.ReadAll(request.Body)
@@ -619,7 +655,7 @@ func decodeAuthorizationFlow(
 	}
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 {
-		return contract.AuthorizationFlowBrowser, true
+		return defaultFlow, true
 	}
 	if !requireMediaType(writer, request, "application/json") {
 		return "", false
@@ -1065,6 +1101,13 @@ func writeServiceUsageError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, context.DeadlineExceeded) || isTimeoutError(err):
 		writeError(writer, http.StatusGatewayTimeout, "subscription_usage_timeout", "subscription usage lookup timed out")
 	default:
+		// A coding plan read names its reason so the app can explain the
+		// failure for that provider.
+		if reason := codingplan.ReasonOf(err); reason != "" {
+			writeErrorDetails(writer, http.StatusBadGateway, "subscription_usage_failed", sanitizeUsageError(err),
+				[]errorDetail{{Reason: string(reason)}})
+			return
+		}
 		writeError(writer, http.StatusBadGateway, "subscription_usage_failed", sanitizeUsageError(err))
 	}
 }

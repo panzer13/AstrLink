@@ -77,6 +77,7 @@ import {
   type ServiceManagerView,
 } from "./ServiceManager";
 import { ProviderImportDialog } from "./ProviderImportDialog";
+import { LocalImportDialog } from "./LocalImportDialog";
 import { useProviderImport } from "./use-provider-import";
 import { notify } from "./notify";
 import type { Service } from "./service-model";
@@ -327,6 +328,11 @@ export default function App() {
   const [pendingPage, setPendingPage] = useState<WorkspacePage | null>(null);
   // Overview and the guide add providers through the same type picker as the list.
   const [serviceKindPickerOpen, setServiceKindPickerOpen] = useState(false);
+  const [localImportOpen, setLocalImportOpen] = useState(false);
+  // Local agent tool configs exist only beside the desktop app.
+  const startLocalImport = isWebEdition
+    ? undefined
+    : () => setLocalImportOpen(true);
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const editorDirtyRef = useRef(false);
   const requestGateRef = useRef<RequestGate | null>(null);
@@ -1081,6 +1087,7 @@ export default function App() {
               <Overview
                 catalog={catalog}
                 copyState={copyState}
+                coreSessionKey={coreSessionKey}
                 isNativeApp={isNativeApp}
                 isReady={isReady}
                 isRestarting={isRestarting}
@@ -1193,6 +1200,7 @@ export default function App() {
                 onServiceRemoved={handleServiceRemoved}
                 onServiceSaved={handleServiceSaved}
                 onViewChange={(next) => navigate(next)}
+                onLocalImport={startLocalImport}
                 protocols={protocols}
                 services={catalog.items}
                 view={page}
@@ -1202,6 +1210,7 @@ export default function App() {
         </ValueTransition>
       </WorkspaceSnapshotProvider>
       <ServiceKindPickerDialog
+        onLocalImport={startLocalImport}
         onOpenChange={setServiceKindPickerOpen}
         onSelect={(serviceKind) => navigate({ kind: "create", serviceKind })}
         open={serviceKindPickerOpen}
@@ -1226,6 +1235,14 @@ export default function App() {
           plan={providerImport.active.plan}
           onAdded={handleProviderImported}
           onClose={providerImport.close}
+        />
+      )}
+      {localImportOpen && (
+        <LocalImportDialog
+          onClose={() => setLocalImportOpen(false)}
+          onImported={rememberService}
+          protocols={protocols}
+          services={catalog.items}
         />
       )}
     </AppShell>

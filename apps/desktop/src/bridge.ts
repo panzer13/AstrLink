@@ -30,7 +30,14 @@ import {
   parseProviderImportNotice,
   type ProviderImportNotice,
 } from "./provider-import-model";
+import {
+  parseLocalImportOpened,
+  parseLocalImportRead,
+  type LocalImportOpened,
+  type LocalImportRead,
+} from "./local-import-model";
 import { parseUsageSummary } from "./usage-summary-model";
+import { parseDisplayCurrency, type DisplayCurrency } from "./currency-display";
 import {
   parsePrivacySummary,
   type PrivacySummary,
@@ -102,14 +109,21 @@ import {
 } from "./privacy-policy-model";
 import {
   parseAuditContent,
+  parseMemoryEntryDetail,
+  parseProjectMemory,
   parsePurgeResult,
+  parseRequestContextTexts,
   parseRequestRecord,
   parseRequestActivity,
   parseRequestRecordPage,
   parseRequestSessionDetail,
   parseRequestSessionPage,
   type AuditContent,
+  type ClientType,
+  type MemoryEntryDetail,
+  type ProjectMemory,
   type RequestActivity,
+  type RequestContextTexts,
   type RequestRecord,
   type RequestRecordListQuery,
   type RequestRecordPage,
@@ -145,9 +159,11 @@ import { parseLocalDataStatus, type LocalDataStatus } from "./local-data-model";
 import {
   parseAuthorizationSession,
   parseBeginCodexAuthorizationResult,
+  parseClaudeCLIStatus,
   type AuthorizationFlow,
   type AuthorizationSession,
   type BeginCodexAuthorizationResult,
+  type ClaudeCLIStatus,
 } from "./subscription-model";
 import {
   parseSubscriptionUsage,
@@ -296,6 +312,12 @@ export async function getPreferences(): Promise<SettingsSnapshot> {
   return parseSettingsSnapshot(await invokeDesktopRead("get_preferences"));
 }
 
+/** The currency amounts show in, with today's rate; see `currency.rs`. */
+export async function getDisplayCurrency(): Promise<DisplayCurrency> {
+  requireNativeBridge();
+  return parseDisplayCurrency(await invoke<unknown>("display_currency"));
+}
+
 export async function updatePreferences(
   input: Preferences,
 ): Promise<SettingsSnapshot> {
@@ -392,6 +414,89 @@ export async function updateServiceOrder(
   parseServiceOrder({ service_ids: serviceIds, etag });
   return parseServiceOrder(
     await invoke("update_service_order", { serviceIds, etag }),
+  );
+}
+
+export const PACKAGE_STRATEGIES = [
+  "auto",
+  "soonest_reset",
+  "most_remaining",
+] as const;
+export type PackageStrategy = (typeof PACKAGE_STRATEGIES)[number];
+/**
+ * Accounts of one provider and plan, or a single service. The core derives
+ * membership; `service_ids` keep their routing order.
+ */
+export interface ServicePackage {
+  id: string;
+  kind: "subscription" | "service";
+  provider?: string;
+  plan_type?: string;
+  service_ids: string[];
+  strategy: PackageStrategy;
+}
+// Plan keys are whatever the provider reports, lowercased, so only the prefix
+// and the absence of control characters are checked here.
+const packageIDPattern = /^(service|subscription):\P{Cc}{1,400}$/u;
+export function isPackageStrategy(value: unknown): value is PackageStrategy {
+  return PACKAGE_STRATEGIES.includes(value as PackageStrategy);
+}
+export function parseServicePackage(value: unknown): ServicePackage {
+  if (!value || typeof value !== "object")
+    throw new Error("Invalid service package");
+  const { id, kind, provider, plan_type, service_ids, strategy } =
+    value as ServicePackage;
+  if (
+    typeof id !== "string" ||
+    !packageIDPattern.test(id) ||
+    (kind !== "subscription" && kind !== "service") ||
+    (provider !== undefined && typeof provider !== "string") ||
+    (plan_type !== undefined && typeof plan_type !== "string") ||
+    !Array.isArray(service_ids) ||
+    service_ids.length === 0 ||
+    service_ids.some(
+      (serviceID) =>
+        typeof serviceID !== "string" ||
+        !/^[a-z][a-z0-9_-]{2,95}$/.test(serviceID),
+    ) ||
+    new Set(service_ids).size !== service_ids.length ||
+    !isPackageStrategy(strategy)
+  )
+    throw new Error("Invalid service package");
+  return {
+    id,
+    kind,
+    ...(provider ? { provider } : {}),
+    ...(plan_type ? { plan_type } : {}),
+    service_ids,
+    strategy,
+  };
+}
+export function parseServicePackages(value: unknown): ServicePackage[] {
+  const packages = (value as { packages?: unknown } | null)?.packages;
+  if (!Array.isArray(packages)) throw new Error("Invalid service packages");
+  const parsed = packages.map(parseServicePackage);
+  const members = parsed.flatMap((item) => item.service_ids);
+  if (
+    new Set(parsed.map((item) => item.id)).size !== parsed.length ||
+    new Set(members).size !== members.length
+  )
+    throw new Error("Invalid service packages");
+  return parsed;
+}
+export async function getServicePackages(): Promise<ServicePackage[]> {
+  requireNativeBridge();
+  return parseServicePackages(await invoke("get_service_packages"));
+}
+export async function updateServicePackageStrategy(
+  packageId: string,
+  strategy: PackageStrategy,
+): Promise<ServicePackage> {
+  requireNativeBridge();
+  if (!packageIDPattern.test(packageId) || !isPackageStrategy(strategy))
+    throw new Error("Invalid service package");
+  return parseServicePackage(
+    await invoke("update_service_package", { packageId, strategy }),
   );
 }
 
@@ -598,6 +703,18 @@ export async function getServiceAuthorization(
   );
 }
 
+/** The claude CLI official Claude accounts run. */
+export async function getClaudeCLI(): Promise<ClaudeCLIStatus> {
+  requireNativeBridge();
+  return parseClaudeCLIStatus(await invoke<unknown>("get_claude_cli"));
+}
+
+/** Starts the official installer; only the server edition offers it. */
+export async function installClaudeCLI(): Promise<ClaudeCLIStatus> {
+  requireNativeBridge();
+  return parseClaudeCLIStatus(await invoke<unknown>("install_claude_cli"));
+}
+
 export async function cancelServiceAuthorization(
   serviceId: string,
 ): Promise<AuthorizationSession> {
@@ -775,6 +892,49 @@ export async function getRequestAuditContent(
   requireNativeBridge();
   return parseAuditContent(
     await invoke<unknown>("get_request_audit_content", { requestId }),
+  );
+}
+
+/** What the texts of a call's captured body read: rules, memory, summary. */
+export async function getRequestContextTexts(
+  requestId: string,
+): Promise<RequestContextTexts> {
+  requireNativeBridge();
+  return parseRequestContextTexts(
+    await invoke<unknown>("get_request_context_texts", { requestId }),
+  );
+}
+
+/**
+ * Which project's memory to read: a project, or the calls that named none;
+ * without either, the project of the most recent call. Without a client, the
+ * one that called there last. `day_start` is when today began here, so the
+ * daily reads follow the local day.
+ */
+export type ProjectMemoryQuery = {
+  client_type?: ClientType;
+  day_start?: string;
+} & (
+  | { project?: string; no_project?: never }
+  | { no_project: true; project?: never }
+);
+
+export async function getProjectMemory(
+  query: ProjectMemoryQuery,
+): Promise<ProjectMemory> {
+  requireNativeBridge();
+  return parseProjectMemory(
+    await invoke<unknown>("get_project_memory", { query }),
+  );
+}
+
+/** One memory of a project's view and each turn that noted or read it. */
+export async function getProjectMemoryEntry(
+  query: ProjectMemoryQuery & { file: string },
+): Promise<MemoryEntryDetail> {
+  requireNativeBridge();
+  return parseMemoryEntryDetail(
+    await invoke<unknown>("get_project_memory_entry", { query }),
   );
 }
 
@@ -1148,6 +1308,65 @@ export async function confirmProviderImport(
 export async function dismissProviderImport(id: string): Promise<void> {
   if (!hasNativeBridge()) return;
   await invoke("dismiss_provider_import", { id });
+}
+
+function requireLocalFiles(): void {
+  if (!hasNativeBridge()) throw new Error(i18n.t("bridge.desktopOnly"));
+}
+
+/** Finds the agent tools' config files and starts an import; reads none. */
+export async function openLocalImport(): Promise<LocalImportOpened> {
+  requireLocalFiles();
+  return parseLocalImportOpened(await invoke<unknown>("local_import_sources"));
+}
+
+/** Reads the checked sources; keys come back only as hints. */
+export async function readLocalImport(
+  session: string,
+  sources: string[],
+): Promise<LocalImportRead> {
+  requireLocalFiles();
+  return parseLocalImportRead(
+    await invoke<unknown>("read_local_import", { session, sources }),
+  );
+}
+
+/** The one model-list request a found provider gets; the host adds its key. */
+export async function probeLocalImportModels(
+  session: string,
+  candidate: string,
+  input: DraftServiceModelProbeInput,
+): Promise<ServiceModelProbe> {
+  requireLocalFiles();
+  return parseServiceModelProbe(
+    await invoke<unknown>("probe_local_import_models", {
+      session,
+      candidate,
+      input,
+    }),
+  );
+}
+
+/** Creates a found provider; the host attaches the key it read. */
+export async function confirmLocalImport(
+  session: string,
+  candidate: string,
+  input: HTTPServiceCreateInput,
+): Promise<ServiceRecord> {
+  requireLocalFiles();
+  return parseServiceRecord(
+    await invoke<unknown>("confirm_local_import", {
+      session,
+      candidate,
+      input,
+    }),
+  );
+}
+
+/** Ends the import; the host drops every key it read. */
+export async function dismissLocalImport(session: string): Promise<void> {
+  if (!hasNativeBridge()) return;
+  await invoke("dismiss_local_import", { session });
 }
 
 export async function listPrivacyPolicies(): Promise<PrivacyPolicyPage> {

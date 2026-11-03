@@ -15,6 +15,7 @@ import {
   usageBarFillClass,
   usageBarPercent,
   usageBarTrackClass,
+  usageFailureReason,
   usageWindowTone,
   windowLabel,
 } from "./subscription-usage-model";
@@ -123,7 +124,7 @@ describe("subscription usage contract", () => {
   it("parses a sanitized official snapshot", () => {
     expect(parseSubscriptionUsage(snapshot)).toEqual(snapshot);
     expect(windowLabel(18_000, false)).toBe("5 小时");
-    expect(windowLabel(604_800, true)).toBe("7 天");
+    expect(windowLabel(604_800, true)).toBe("每周");
     expect(usageBarPercent(134)).toBe(100);
     expect(usageWindowTone(80)).toBe("warning");
     expect(usageWindowTone(12, true)).toBe("critical");
@@ -309,5 +310,19 @@ describe("subscription usage contract", () => {
         outcome: "full_reset",
       }),
     ).toThrow(/outcome/);
+  });
+});
+
+describe("usageFailureReason", () => {
+  it("reads the reason from a web error or a desktop error's text", () => {
+    expect(usageFailureReason({ reason: "no_plan" })).toBe("no_plan");
+    expect(
+      usageFailureReason(
+        new Error(
+          `GET /control/v1/services/svc/usage returned 502 Bad Gateway: {"error":{"code":"subscription_usage_failed","details":[{"reason":"timeout"}]}}`,
+        ),
+      ),
+    ).toBe("timeout");
+    expect(usageFailureReason(new Error("status 401"))).toBeUndefined();
   });
 });

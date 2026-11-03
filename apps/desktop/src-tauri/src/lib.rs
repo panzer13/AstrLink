@@ -4,6 +4,7 @@ mod cc_switch;
 mod client_config;
 mod client_updates;
 mod control_session;
+mod currency;
 mod data_hygiene;
 #[cfg(debug_assertions)]
 mod dev_reload;
@@ -12,8 +13,10 @@ mod host_files;
 mod i18n;
 mod instance;
 mod kek_store;
+mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_app;
+mod macos_widget;
 mod model_updates;
 mod os_lock;
 mod preferences;
@@ -100,6 +103,7 @@ struct PreferencesInput {
     locale: Locale,
     theme: ThemePreference,
     quota_display_mode: preferences::QuotaDisplayMode,
+    display_currency: String,
     #[serde(default)]
     tray: TrayPreferences,
     #[serde(default)]
@@ -123,6 +127,7 @@ impl From<PreferencesInput> for Preferences {
             locale: input.locale,
             theme: input.theme,
             quota_display_mode: input.quota_display_mode,
+            display_currency: input.display_currency,
             tray: input.tray,
             updates: input.updates,
         }
@@ -481,7 +486,8 @@ fn update_preferences(
     let values = Preferences::from(input);
     values.validate()?;
     let locale = values.locale;
-    let previous_tray = store.snapshot().values.tray;
+    let previous = store.snapshot().values;
+    let previous_tray = previous.tray;
     let autostart = app.autolaunch();
     let actual = autostart.is_enabled().map_err(|error| {
         i18n::t(
@@ -561,6 +567,12 @@ fn update_preferences(
     tray::refresh(&app);
     if let Err(error) = app.emit("quota-display-mode-changed", values.quota_display_mode) {
         eprintln!("unable to broadcast quota display mode: {error}");
+    }
+    if values.display_currency != previous.display_currency {
+        if let Some(rates) = app.try_state::<Arc<currency::ExchangeRates>>() {
+            rates.wake();
+        }
+        currency::broadcast(&app);
     }
     apply_native_theme(&app, values.theme);
     if let Err(error) = app.emit("theme-preference-changed", values.theme) {
@@ -1365,6 +1377,22 @@ async fn update_service_order(
 }
 
 #[tauri::command]
+async fn get_service_packages(
+    manager: State<'_, Arc<CoreManager>>,
+) -> Result<serde_json::Value, String> {
+    manager.get_service_packages().await
+}
+
+#[tauri::command]
+async fn update_service_package(
+    package_id: String,
+    strategy: String,
+    manager: State<'_, Arc<CoreManager>>,
+) -> Result<serde_json::Value, String> {
+    manager.update_service_package(&package_id, &strategy).await
+}
+
+#[tauri::command]
 async fn get_service(
     service_id: String,
     manager: State<'_, Arc<CoreManager>>,
@@ -1561,12 +1589,17 @@ async fn save_text_file(
     contents: String,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let Some(file) = app
-            .dialog()
-            .file()
-            .set_file_name(&default_filename)
-            .blocking_save_file()
-        else {
+        let dialog = app.dialog().file().set_file_name(&default_filename);
+        // Windows uses the filter's extension when saving a name without a suffix.
+        let dialog = match std::path::Path::new(&default_filename)
+            .extension()
+            .and_then(|extension| extension.to_str())
+        {
+            Some("md") => dialog.add_filter("Markdown (*.md)", &["md"]),
+            Some("txt") => dialog.add_filter("TXT (*.txt)", &["txt"]),
+            _ => dialog,
+        };
+        let Some(file) = dialog.blocking_save_file() else {
             return Ok(None);
         };
         let path = file.into_path().map_err(|error| error.to_string())?;
@@ -1583,6 +1616,11 @@ async fn get_service_authorization(
     manager: State<'_, Arc<CoreManager>>,
 ) -> Result<serde_json::Value, String> {
     manager.get_service_authorization(&service_id).await
+}
+
+#[tauri::command]
+async fn get_claude_cli(manager: State<'_, Arc<CoreManager>>) -> Result<serde_json::Value, String> {
+    manager.get_claude_cli().await
 }
 
 #[tauri::command]
@@ -1640,6 +1678,22 @@ async fn get_request_activity(
     manager: State<'_, Arc<CoreManager>>,
 ) -> Result<serde_json::Value, String> {
     manager.get_request_activity(&since).await
+}
+
+#[tauri::command]
+async fn get_project_memory(
+    query: serde_json::Value,
+    manager: State<'_, Arc<CoreManager>>,
+) -> Result<serde_json::Value, String> {
+    manager.get_project_memory(query).await
+}
+
+#[tauri::command]
+async fn get_project_memory_entry(
+    query: serde_json::Value,
+    manager: State<'_, Arc<CoreManager>>,
+) -> Result<serde_json::Value, String> {
+    manager.get_project_memory_entry(query).await
 }
 
 #[tauri::command]
@@ -1715,6 +1769,14 @@ async fn get_request_audit_content(
     manager: State<'_, Arc<CoreManager>>,
 ) -> Result<serde_json::Value, String> {
     manager.get_request_audit_content(&request_id).await
+}
+
+#[tauri::command]
+async fn get_request_context_texts(
+    request_id: String,
+    manager: State<'_, Arc<CoreManager>>,
+) -> Result<serde_json::Value, String> {
+    manager.get_request_context_texts(&request_id).await
 }
 
 #[tauri::command]
@@ -2660,15 +2722,22 @@ pub fn run() {
         .manage(Arc::new(client_updates::ClientUpdateManager::default()))
         .manage(Arc::new(model_updates::PrivacyModelUpdates::default()))
         .manage(provider_import::ProviderImports::default())
+        .manage(local_import::LocalImports::default())
         .invoke_handler(tauri::generate_handler![
             client_updates::local_client_status,
             provider_import::pending_provider_import,
             provider_import::dismiss_provider_import,
             provider_import::confirm_provider_import,
+            local_import::local_import_sources,
+            local_import::read_local_import,
+            local_import::probe_local_import_models,
+            local_import::confirm_local_import,
+            local_import::dismiss_local_import,
             client_updates::refresh_local_clients,
             client_updates::update_local_clients,
             updates::app_update_status,
             model_updates::privacy_model_update_status,
+            currency::display_currency,
             updates::check_app_update,
             updates::download_app_update,
             updates::install_app_update,
@@ -2689,6 +2758,8 @@ pub fn run() {
             list_services,
             get_service_order,
             update_service_order,
+            get_service_packages,
+            update_service_package,
             get_service,
             create_service,
             update_service,
@@ -2712,6 +2783,7 @@ pub fn run() {
             service_terminal::pick_terminal_directory,
             service_terminal::open_service_terminal,
             get_service_authorization,
+            get_claude_cli,
             cancel_service_authorization,
             logout_service,
             clear_service_risk,
@@ -2719,6 +2791,8 @@ pub fn run() {
             list_request_records,
             list_request_sessions,
             get_request_activity,
+            get_project_memory,
+            get_project_memory_entry,
             get_request_session,
             get_session_channel_bindings,
             release_session_channel_bindings,
@@ -2727,6 +2801,7 @@ pub fn run() {
             delete_request_record,
             purge_request_records,
             get_request_audit_content,
+            get_request_context_texts,
             list_raw_access,
             decide_raw_access,
             revoke_raw_grant,
@@ -2833,6 +2908,7 @@ pub fn run() {
             }
             start_client_config_sync(Arc::clone(&setup_manager), Arc::clone(&preferences));
             app.manage(preferences);
+            app.manage(Arc::new(currency::ExchangeRates::load(&config_directory)));
             let updates =
                 Arc::new(updates::UpdateManager::new(app.handle()).map_err(std::io::Error::other)?);
             app.manage(Arc::clone(&updates));
@@ -2850,6 +2926,7 @@ pub fn run() {
                 }
             }
             tray::start(app.handle());
+            currency::start(app.handle());
             model_updates::start(app.handle());
             // The raw unlock and agent grants end with the session lock.
             os_lock::watch(app.handle());

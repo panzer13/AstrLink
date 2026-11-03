@@ -57,6 +57,7 @@ const bridgeMocks = vi.hoisted(() => ({
   listRawAccess: vi.fn().mockResolvedValue([]),
   listAccessTokenUsage: vi.fn().mockResolvedValue({ items: [] }),
   listServices: vi.fn(),
+  getServicePackages: vi.fn().mockResolvedValue([]),
   listPrivacyModelInstallations: vi.fn(),
   listPrivacyPolicies: vi.fn(),
   listRequestRecords: vi.fn(),
@@ -223,6 +224,19 @@ async function setInput(selector: string, value: string): Promise<void> {
   await act(async () => {
     valueSetter.call(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+/** Radix activates a tab on mouse down, not on click. */
+async function openTab(label: string): Promise<void> {
+  const tab = [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+  ].find((candidate) => candidate.textContent === label);
+  if (!tab) throw new Error(`Missing tab: ${label}`);
+  await act(async () => {
+    tab.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, button: 0 }),
+    );
   });
 }
 
@@ -510,9 +524,12 @@ describe("App workspace navigation", () => {
       },
       by_day: [],
       by_hour: [],
+      by_hour_model: [],
       by_service: [],
       by_model: [],
       by_token: [],
+      by_client: [],
+      by_route: [],
       scanned_records: 0,
       capped: false,
     }));
@@ -1164,6 +1181,7 @@ describe("App workspace navigation", () => {
         locale: "zh-CN",
         theme: "system",
         quota_display_mode: "remaining" as const,
+        display_currency: "auto" as const,
         tray: defaultTrayPreferences(),
         updates: defaultUpdatePreferences(),
       },
@@ -1176,6 +1194,7 @@ describe("App workspace navigation", () => {
     bridgeMocks.getPreferences.mockResolvedValue(preferences);
     await renderApp();
     await act(async () => button("设置").click());
+    await openTab("网关与网络");
     await setInput('input[type="number"]', "9123");
     await act(async () => button("概览").click());
     await act(async () => button("放弃修改并离开").click());
@@ -1186,6 +1205,7 @@ describe("App workspace navigation", () => {
       }),
     );
     await act(async () => button("设置").click());
+    await openTab("网关与网络");
     const port = container.querySelector<HTMLInputElement>(
       'input[type="number"]',
     );
@@ -1265,7 +1285,7 @@ describe("App workspace navigation", () => {
     expect(container.textContent).toContain("API 地址");
     expect(container.textContent).toContain("用量概览");
     expect(
-      container.querySelector("[data-slot='activity-heatmap']"),
+      container.querySelector("[data-slot='usage-star-trail']"),
     ).not.toBeNull();
     expect(container.textContent).toContain("按 API 提供商");
     expect(container.textContent).toContain("按模型");
@@ -1299,7 +1319,7 @@ describe("App workspace navigation", () => {
     expect(
       document.querySelector('[aria-current="page"]')?.textContent,
     ).toContain("提供商");
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
     expect(container.textContent).toContain("Primary gateway");
     expect(container.textContent).toContain("Codex 订阅");
     expect(
@@ -1310,7 +1330,7 @@ describe("App workspace navigation", () => {
     await act(async () => {
       button("添加 API 提供商").click();
     });
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
     await chooseKindCard("New API");
     expect(workspaceHeading().textContent).toBe("添加 API 提供商");
     expect(
@@ -1331,7 +1351,7 @@ describe("App workspace navigation", () => {
     await act(async () => {
       back?.click();
     });
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
   });
 
   it("opens a provider's requests from its usage row and its settings from the gear", async () => {
@@ -1435,7 +1455,7 @@ describe("App workspace navigation", () => {
     expect(
       document.querySelector('[aria-current="page"]')?.textContent,
     ).toContain("提供商");
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
     expect(container.textContent).toContain("Codex 订阅");
     expect(
       container.querySelector('[aria-label="更多 Codex 订阅 操作"]'),
@@ -1460,6 +1480,7 @@ describe("App workspace navigation", () => {
         locale: "zh-CN",
         theme: "system",
         quota_display_mode: "remaining" as const,
+        display_currency: "auto" as const,
         tray: defaultTrayPreferences(),
         updates: defaultUpdatePreferences(),
       },
@@ -1479,9 +1500,9 @@ describe("App workspace navigation", () => {
       await Promise.resolve();
     });
     expect(workspaceHeading().textContent).toBe("设置");
-    expect(container.textContent).toContain("推理入口");
-    expect(container.textContent).toContain("检查并发");
-    expect(container.textContent).toContain("响应头等待");
+    expect(container.textContent).toContain("外观");
+    expect(container.textContent).toContain("关闭主窗口时");
+    expect(container.textContent).toContain("网关与网络");
     expect(container.textContent).not.toContain("工具接入");
     expect(
       container.querySelector('[data-slot="local-data-notice"]'),
@@ -1504,6 +1525,7 @@ describe("App workspace navigation", () => {
         locale: "zh-CN",
         theme: "system",
         quota_display_mode: "remaining" as const,
+        display_currency: "auto" as const,
         tray: defaultTrayPreferences(),
         updates: defaultUpdatePreferences(),
       },
@@ -1536,7 +1558,7 @@ describe("App workspace navigation", () => {
       button("前往提供商").click();
       await Promise.resolve();
     });
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
 
     await openSettings();
     await act(async () => {
@@ -1591,6 +1613,7 @@ describe("App workspace navigation", () => {
         locale: "zh-CN",
         theme: "system",
         quota_display_mode: "remaining" as const,
+        display_currency: "auto" as const,
         tray: defaultTrayPreferences(),
         updates: defaultUpdatePreferences(),
       },
@@ -1605,6 +1628,7 @@ describe("App workspace navigation", () => {
       button("设置").click();
       await Promise.resolve();
     });
+    await openTab("网关与网络");
     const port = container.querySelector<HTMLInputElement>(
       'input[type="number"]',
     );
@@ -1662,29 +1686,25 @@ describe("App workspace navigation", () => {
     expect(bridgeMocks.getUsageSummary).toHaveBeenCalledTimes(requestCalls);
   });
 
-  it("summarizes usage over the default yearly window", async () => {
+  it("reads the last 24 hours once when the overview first opens", async () => {
     await renderApp();
+    await act(async () => {
+      await Promise.resolve();
+    });
 
+    // The request sky is hidden by default and reads nothing.
+    expect(container.querySelector('[data-slot="request-sky"]')).toBeNull();
     const query = bridgeMocks.getUsageSummary.mock.calls[0]?.[0];
     expect(bridgeMocks.getUsageSummary).toHaveBeenCalledTimes(1);
     expect(bridgeMocks.listRequestRecords).not.toHaveBeenCalled();
-    expect(query).toMatchObject({ preset: "1y" });
+    expect(query).toMatchObject({ preset: "1d" });
     const from = new Date(query.from as string);
     const to = new Date(query.to as string);
-    expect(from.getHours()).toBe(0);
-    expect(from.getMinutes()).toBe(0);
-    expect(to.getHours()).toBe(0);
-    // 365 inclusive local days, ending today.
-    expect(Math.round((to.getTime() - from.getTime()) / 86_400_000)).toBe(365);
-
-    const today = new Date();
-    expect(to.getDate()).toBe(
-      new Date(
-        today.getFullYear(),
-        today.getMonth(),
-        today.getDate() + 1,
-      ).getDate(),
-    );
+    // 24 local hours, ending with the current one.
+    expect(to.getTime() - from.getTime()).toBe(24 * 3_600_000);
+    expect(to.getMinutes()).toBe(0);
+    expect(from.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(to.getTime()).toBeGreaterThan(Date.now());
   });
 
   it("revalidates the overview silently on return, on a timer, and when shown again", async () => {
@@ -1895,7 +1915,7 @@ describe("App workspace navigation", () => {
     });
 
     expect(bridgeMocks.createService).toHaveBeenCalledOnce();
-    expect(workspaceHeading().textContent).toBe("API 提供商");
+    expect(workspaceHeading().textContent).toBe("提供商");
     expect(container.textContent).not.toContain("放弃未保存的修改？");
     expect(document.querySelector('[role="alertdialog"]')).toBeNull();
   });
