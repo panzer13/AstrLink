@@ -7,6 +7,7 @@ import type { ClientType } from "../request-record-model";
 import claude from "./pet-art/claude.json";
 import codex from "./pet-art/codex.json";
 import deepseek from "./pet-art/deepseek.json";
+import gemini from "./pet-art/gemini.json";
 import { cfg } from "./toy-config";
 
 export interface Point {
@@ -70,6 +71,7 @@ const KITS: Partial<Record<ClientType, Kit>> = {
   claude_code: claude as Kit,
   codex: codex as Kit,
   deepseek_harness: deepseek as Kit,
+  gemini_cli: gemini as Kit,
 };
 
 /** Whether the client has a drawn girl of its own. */
@@ -215,8 +217,9 @@ export function build(kit: Kit, pose: KitPose): Built {
 
   const grid = kit.base.join("").split("");
   const frame = kit.frames[name];
-  if (frame) overlay(kit, grid, frame);
+  // The face goes on first, so a hand at her chin stays in front of it.
   if (face) overlay(kit, grid, face);
+  if (frame) overlay(kit, grid, frame);
   if (leg >= 0 && kit.legs[leg]) lift(kit, grid, kit.legs[leg]);
   if (curl && kit.curl) sway(kit, grid, kit.curl, curl);
   for (const b of worn) {

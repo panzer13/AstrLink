@@ -72,7 +72,16 @@ export async function consoleRequest(
       error?.details?.find((v: Args) => typeof v.reason === "string")?.reason,
     );
   }
-  return { value, etag: response.headers.get("ETag") };
+  return { value, etag: strongETag(response.headers.get("ETag")) };
+}
+
+/**
+ * Core sends strong ETags. A proxy or CDN that compresses the response marks
+ * them weak (`W/"…"`) without changing the value, and core compares If-Match
+ * exactly, so drop the prefix it added.
+ */
+function strongETag(etag: string | null): string | null {
+  return etag?.startsWith('W/"') ? etag.slice(2) : etag;
 }
 
 /** Core repeats one singular parameter per item of these lists. */
@@ -186,7 +195,7 @@ function validServiceTestId(testId: string): boolean {
   return testId.length > 0 && testId.length <= 128;
 }
 
-/** Mirrors sidecar.rs, raw_access.rs and the host's response envelopes. */
+/** Mirrors `internal/control`, `internal/raw` and the host's response envelopes. */
 const commands: Record<string, Command> = {
   core_status: async () => {
     const [health, version, capabilities] = await Promise.all([

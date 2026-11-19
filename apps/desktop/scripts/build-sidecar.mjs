@@ -15,7 +15,11 @@ import {
 } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { downloadWithRetry } from "./download-with-retry.mjs";
+import {
+  fetchOnnxRuntimePackage,
+  readZipEntry,
+  withUnixLineEndings,
+} from "./onnx-runtime-package.mjs";
 import { stageWindowsVcRuntime } from "./stage-windows-vc-runtime.mjs";
 
 const onnxRuntimeVersion = "1.23.2";
@@ -72,35 +76,32 @@ const onnxRuntimeNotices = {
     },
   ],
 };
+// Microsoft.ML.OnnxRuntime on NuGet, one package per runtime version. Windows
+// takes only the notices from its package.
+const onnxRuntimePackages = {
+  [onnxRuntimeVersion]: {
+    sha256: "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a",
+    size: 123_371_574,
+  },
+  [coreMLRuntimeVersion]: {
+    sha256: "4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638",
+    size: 125_194_303,
+  },
+  [windowsRuntimeVersion]: {
+    sha256: "7e35fdb4f5adb62f01e60798e2e5ed05108f5fbbe1cca03fbcc37903cf7c5e3b",
+    size: 159_626_085,
+  },
+};
+// Each target's library inside the package.
 const macOSRuntimeAssets = {
-  "aarch64-apple-darwin": {
-    archive: `onnxruntime-osx-arm64-${onnxRuntimeVersion}.tgz`,
-    directory: `onnxruntime-osx-arm64-${onnxRuntimeVersion}`,
-    sha256: "b4d513ab2b26f088c66891dbbc1408166708773d7cc4163de7bdca0e9bbb7856",
-    size: 9_999_931,
-  },
-  "x86_64-apple-darwin": {
-    archive: `onnxruntime-osx-x86_64-${onnxRuntimeVersion}.tgz`,
-    directory: `onnxruntime-osx-x86_64-${onnxRuntimeVersion}`,
-    sha256: "d10359e16347b57d9959f7e80a225a5b4a66ed7d7e007274a15cae86836485a6",
-    size: 11_676_322,
-  },
+  "aarch64-apple-darwin": "runtimes/osx-arm64/native/libonnxruntime.dylib",
+  "x86_64-apple-darwin": "runtimes/osx-x64/native/libonnxruntime.dylib",
 };
 const coreMLRuntimeAssets = {
-  "aarch64-apple-darwin": {
-    archive: `onnxruntime-osx-arm64-${coreMLRuntimeVersion}.tgz`,
-    directory: `onnxruntime-osx-arm64-${coreMLRuntimeVersion}`,
-    sha256: "93787795f47e1eee369182e43ed51b9e5da0878ab0346aecf4258979b8bba989",
-    size: 30_937_282,
-  },
+  "aarch64-apple-darwin": "runtimes/osx-arm64/native/libonnxruntime.dylib",
 };
 const linuxRuntimeAssets = {
-  "x86_64-unknown-linux-gnu": {
-    archive: `onnxruntime-linux-x64-${onnxRuntimeVersion}.tgz`,
-    directory: `onnxruntime-linux-x64-${onnxRuntimeVersion}`,
-    sha256: "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b",
-    size: 8_309_231,
-  },
+  "x86_64-unknown-linux-gnu": "runtimes/linux-x64/native/libonnxruntime.so",
 };
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
@@ -118,9 +119,7 @@ const rustVersion = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
 const target = rustVersion.match(/^host:\s+(.+)$/m)?.[1]?.trim();
 
 if (!target) {
-  throw new Error(
-    "Unable to determine the Rust host target for the Tauri sidecar.",
-  );
+  throw new Error("Unable to determine the Rust host target for the workers.");
 }
 
 const executableSuffix = target.includes("windows") ? ".exe" : "";
@@ -141,7 +140,31 @@ if (reuseWindowsWorkers) {
     reuseWindowsWorkers = false;
   }
 }
-const binariesDirectory = path.join(desktopDirectory, "src-tauri", "binaries");
+// Intermediate outputs: the programs under their target names, the pinned
+// ONNX Runtime and the Windows VC++ runtime the installer embeds
+// (installer/windows.nsh).
+const binariesDirectory = path.join(desktopDirectory, "build", "staging");
+// The MyGo app ships resources/<os>-<arch> merged into its resource
+// directory: the programs under bin/, the Linux ONNX Runtime under
+// onnxruntime/ and the license notices under notices/. Each program keeps
+// its plain name, so Core finds its workers beside it.
+const mygoPlatform = {
+  "aarch64-apple-darwin": "darwin-arm64",
+  "x86_64-apple-darwin": "darwin-amd64",
+  "x86_64-unknown-linux-gnu": "linux-amd64",
+  "aarch64-unknown-linux-gnu": "linux-arm64",
+  "x86_64-pc-windows-msvc": "windows-amd64",
+  "aarch64-pc-windows-msvc": "windows-arm64",
+}[target];
+if (!mygoPlatform) {
+  throw new Error(`No MyGo platform directory for the Rust target ${target}.`);
+}
+const resourcesDirectory = path.join(
+  desktopDirectory,
+  "resources",
+  mygoPlatform,
+);
+const resourcesBinDirectory = path.join(resourcesDirectory, "bin");
 const output = path.join(
   binariesDirectory,
   `astrlink-core-${target}${executableSuffix}`,
@@ -158,15 +181,52 @@ const cliOutput = path.join(
   binariesDirectory,
   `astrlink-cli-${target}${executableSuffix}`,
 );
-// Tauri config files are per OS, not per architecture. The bundle scripts
-// merge this generated file (`tauri --config`) so only Apple silicon builds
-// add the Core ML runtime and its notices; it is empty everywhere else.
-const runtimeConfigOutput = path.join(
-  binariesDirectory,
-  "tauri.onnxruntime.conf.json",
-);
-
 mkdirSync(binariesDirectory, { recursive: true });
+mkdirSync(resourcesBinDirectory, { recursive: true });
+
+// stageResource copies a staged file into the MyGo platform resources.
+function stageResource(source, relativePath) {
+  const destination = path.join(resourcesDirectory, relativePath);
+  mkdirSync(path.dirname(destination), { recursive: true });
+  copyFileSync(source, destination);
+  if (relativePath.startsWith("bin/") && !target.includes("windows")) {
+    chmodSync(destination, 0o755);
+  }
+}
+
+// stageProgram copies a built program into bin/ under its plain name.
+function stageProgram(sidecar, name) {
+  stageResource(sidecar, `bin/${name}${executableSuffix}`);
+  console.log(`Staged ${name} for MyGo: ${resourcesBinDirectory}`);
+}
+
+// onnxRuntimePackage returns the pinned NuGet package of a runtime version,
+// kept under the privacy worker's target directory between builds.
+function onnxRuntimePackage(version) {
+  return fetchOnnxRuntimePackage(
+    version,
+    onnxRuntimePackages[version],
+    path.join(workerDirectory, "target", "onnxruntime", version),
+  );
+}
+
+// extractOnnxRuntimeLibrary writes this target's library from the package
+// under libraryName, the name the workers load, and returns its path.
+async function extractOnnxRuntimeLibrary(version, entry, libraryName) {
+  const archive = readFileSync(await onnxRuntimePackage(version));
+  const directory = path.join(
+    workerDirectory,
+    "target",
+    "onnxruntime",
+    version,
+    target,
+  );
+  rmSync(directory, { recursive: true, force: true });
+  mkdirSync(directory, { recursive: true });
+  const runtimeSource = path.join(directory, libraryName);
+  writeFileSync(runtimeSource, readZipEntry(archive, entry), { mode: 0o755 });
+  return runtimeSource;
+}
 
 async function stageOnnxRuntimeNotices(version) {
   const cacheDirectory = path.join(
@@ -178,6 +238,7 @@ async function stageOnnxRuntimeNotices(version) {
   );
   mkdirSync(cacheDirectory, { recursive: true });
 
+  let archive;
   for (const notice of onnxRuntimeNotices[version]) {
     const cached = path.join(cacheDirectory, notice.source);
     if (
@@ -187,13 +248,8 @@ async function stageOnnxRuntimeNotices(version) {
       rmSync(cached, { force: true });
     }
     if (!existsSync(cached)) {
-      const url =
-        `https://raw.githubusercontent.com/microsoft/onnxruntime/` +
-        `v${version}/${notice.source}`;
-      const bytes = await downloadWithRetry(
-        url,
-        `pinned ONNX Runtime ${version} ${notice.source}`,
-      );
+      archive ??= readFileSync(await onnxRuntimePackage(version));
+      const bytes = withUnixLineEndings(readZipEntry(archive, notice.source));
       if (bytes.byteLength !== notice.size || sha256(bytes) !== notice.sha256) {
         throw new Error(
           `Pinned ONNX Runtime ${version} ${notice.source} failed integrity verification.`,
@@ -211,6 +267,7 @@ async function stageOnnxRuntimeNotices(version) {
       cached,
       path.join(binariesDirectory, `onnxruntime-${version}-${notice.name}`),
     );
+    stageResource(cached, `notices/onnxruntime-${version}/${notice.name}`);
   }
   console.log(`Staged pinned ONNX Runtime ${version} license notices.`);
 }
@@ -221,69 +278,26 @@ async function stageMacOSRuntime(
   libraryName = macOSRuntimeLibraryName,
   workerDirectories = [workerDirectory, classifierWorkerDirectory],
 ) {
-  const asset = assets[target];
-  if (!asset) {
+  const entry = assets[target];
+  if (!entry) {
     if (target.endsWith("-apple-darwin") && assets === macOSRuntimeAssets) {
       throw new Error(`Unsupported macOS target for ONNX Runtime: ${target}`);
     }
     return;
   }
 
-  const cacheDirectory = path.join(
-    workerDirectory,
-    "target",
-    "onnxruntime",
+  const runtimeSource = await extractOnnxRuntimeLibrary(
     version,
-    target,
-  );
-  const archivePath = path.join(cacheDirectory, asset.archive);
-  const extractionDirectory = path.join(cacheDirectory, "extracted");
-  mkdirSync(cacheDirectory, { recursive: true });
-
-  if (
-    existsSync(archivePath) &&
-    !fileMatches(archivePath, asset.size, asset.sha256)
-  ) {
-    rmSync(archivePath, { force: true });
-  }
-  if (!existsSync(archivePath)) {
-    const url =
-      `https://github.com/microsoft/onnxruntime/releases/download/` +
-      `v${version}/${asset.archive}`;
-    const bytes = await downloadWithRetry(
-      url,
-      `pinned ONNX Runtime ${version}`,
-    );
-    if (bytes.byteLength !== asset.size || sha256(bytes) !== asset.sha256) {
-      throw new Error(
-        `Pinned ONNX Runtime ${version} archive failed integrity verification.`,
-      );
-    }
-    const temporaryArchive = `${archivePath}.download`;
-    writeFileSync(temporaryArchive, bytes, { mode: 0o600 });
-    renameSync(temporaryArchive, archivePath);
-  }
-
-  rmSync(extractionDirectory, { recursive: true, force: true });
-  mkdirSync(extractionDirectory, { recursive: true });
-  execFileSync("tar", ["-xzf", archivePath, "-C", extractionDirectory], {
-    stdio: "inherit",
-  });
-  const runtimeSource = path.join(
-    extractionDirectory,
-    asset.directory,
-    "lib",
+    entry,
     libraryName,
   );
-  if (!existsSync(runtimeSource)) {
-    throw new Error(`Pinned ONNX Runtime archive is missing ${libraryName}.`);
-  }
-
   const runtimeDestinations = [
     ...workerDirectories.map((directory) =>
       path.join(directory, "target", "release", libraryName),
     ),
     path.join(binariesDirectory, libraryName),
+    // The workers load it from beside their executable.
+    path.join(resourcesBinDirectory, libraryName),
   ];
   return { runtimeSource, runtimeDestinations, version };
 }
@@ -297,99 +311,20 @@ function stageCoreMLRuntime() {
   );
 }
 
-function writeRuntimeConfig(coreMLRuntime) {
-  let config = {};
-  if (coreMLRuntime) {
-    // A merged array replaces the configured one, so start from the list
-    // the build would otherwise use: the macOS file's, if it has one.
-    const bundleConfig = (name) =>
-      JSON.parse(
-        readFileSync(path.join(desktopDirectory, "src-tauri", name), "utf8"),
-      ).bundle;
-    const frameworks =
-      bundleConfig("tauri.macos.conf.json")?.macOS?.frameworks ??
-      bundleConfig("tauri.conf.json").macOS.frameworks;
-    config = {
-      bundle: {
-        macOS: {
-          frameworks: [...frameworks, `binaries/${coreMLRuntimeLibraryName}`],
-        },
-        resources: Object.fromEntries(
-          onnxRuntimeNotices[coreMLRuntimeVersion].map((notice) => [
-            `binaries/onnxruntime-${coreMLRuntimeVersion}-${notice.name}`,
-            `notices/onnxruntime-${coreMLRuntimeVersion}/${notice.name}`,
-          ]),
-        ),
-      },
-    };
-  }
-  writeFileSync(runtimeConfigOutput, `${JSON.stringify(config, null, 2)}\n`);
-  console.log(
-    `Wrote Tauri runtime config for ${target}: ${runtimeConfigOutput}`,
-  );
-}
-
 async function stageLinuxRuntime() {
-  const asset = linuxRuntimeAssets[target];
-  if (!asset) {
+  const entry = linuxRuntimeAssets[target];
+  if (!entry) {
     if (target.includes("-linux-")) {
       throw new Error(`Unsupported Linux target for ONNX Runtime: ${target}`);
     }
     return;
   }
 
-  const cacheDirectory = path.join(
-    workerDirectory,
-    "target",
-    "onnxruntime",
+  const runtimeSource = await extractOnnxRuntimeLibrary(
     onnxRuntimeVersion,
-    target,
-  );
-  const archivePath = path.join(cacheDirectory, asset.archive);
-  const extractionDirectory = path.join(cacheDirectory, "extracted");
-  mkdirSync(cacheDirectory, { recursive: true });
-
-  if (
-    existsSync(archivePath) &&
-    !fileMatches(archivePath, asset.size, asset.sha256)
-  ) {
-    rmSync(archivePath, { force: true });
-  }
-  if (!existsSync(archivePath)) {
-    const url =
-      `https://github.com/microsoft/onnxruntime/releases/download/` +
-      `v${onnxRuntimeVersion}/${asset.archive}`;
-    const bytes = await downloadWithRetry(
-      url,
-      `pinned ONNX Runtime ${onnxRuntimeVersion}`,
-    );
-    if (bytes.byteLength !== asset.size || sha256(bytes) !== asset.sha256) {
-      throw new Error(
-        `Pinned ONNX Runtime ${onnxRuntimeVersion} archive failed integrity verification.`,
-      );
-    }
-    const temporaryArchive = `${archivePath}.download`;
-    writeFileSync(temporaryArchive, bytes, { mode: 0o600 });
-    renameSync(temporaryArchive, archivePath);
-  }
-
-  rmSync(extractionDirectory, { recursive: true, force: true });
-  mkdirSync(extractionDirectory, { recursive: true });
-  execFileSync("tar", ["-xzf", archivePath, "-C", extractionDirectory], {
-    stdio: "inherit",
-  });
-  const runtimeSource = path.join(
-    extractionDirectory,
-    asset.directory,
-    "lib",
+    entry,
     linuxRuntimeLibraryName,
   );
-  if (!existsSync(runtimeSource)) {
-    throw new Error(
-      `Pinned ONNX Runtime archive is missing ${linuxRuntimeLibraryName}.`,
-    );
-  }
-
   const runtimeDestinations = [
     path.join(workerDirectory, "target", "release", linuxRuntimeLibraryName),
     path.join(
@@ -399,6 +334,8 @@ async function stageLinuxRuntime() {
       linuxRuntimeLibraryName,
     ),
     path.join(binariesDirectory, linuxRuntimeLibraryName),
+    // The desktop hands Core this path (ASTRLINK_ONNX_RUNTIME_PATH).
+    path.join(resourcesDirectory, "onnxruntime", linuxRuntimeLibraryName),
   ];
   return { runtimeSource, runtimeDestinations };
 }
@@ -502,6 +439,14 @@ if (process.argv.includes("--test-runtime-only")) {
   process.exit(0);
 }
 
+// The licenses the app ships, as the About page lists them.
+for (const [source, destination] of [
+  ["LICENSE", "licenses/LICENSE"],
+  ["LICENSING.md", "licenses/LICENSING.md"],
+  ["LICENSES/AGPL-3.0.txt", "licenses/LICENSES/AGPL-3.0.txt"],
+]) {
+  stageResource(path.join(repositoryRoot, source), destination);
+}
 if (target.includes("windows")) {
   assertWindowsRuntimeVersion();
   await stageOnnxRuntimeNotices(windowsRuntimeVersion);
@@ -514,7 +459,7 @@ if (coreMLRuntimeAssets[target]) {
 await stageWindowsVcRuntime({ target, binariesDirectory });
 
 // Release jobs stamp the tag into package.json before this script runs, so
-// Core reports the same version as the desktop shell.
+// Core reports the same version as the desktop app.
 const { version: appVersion } = JSON.parse(
   readFileSync(path.join(desktopDirectory, "package.json"), "utf8"),
 );
@@ -535,7 +480,8 @@ execFileSync(
   },
 );
 
-console.log(`Staged astrlink-core for Tauri: ${output}`);
+console.log(`Staged astrlink-core for MyGo: ${output}`);
+stageProgram(output, "astrlink-core");
 
 execFileSync(
   "go",
@@ -548,7 +494,8 @@ execFileSync(
 if (!target.includes("windows")) {
   chmodSync(cliOutput, 0o755);
 }
-console.log(`Staged astrlink-cli for Tauri: ${cliOutput}`);
+console.log(`Staged astrlink-cli for MyGo: ${cliOutput}`);
+stageProgram(cliOutput, "astrlink-cli");
 
 const macOSRuntime = await stageMacOSRuntime();
 const coreMLRuntime = await stageCoreMLRuntime();
@@ -582,7 +529,6 @@ for (const runtime of [macOSRuntime, coreMLRuntime]) {
   }
   console.log(`Staged pinned ONNX Runtime ${runtime.version} for macOS.`);
 }
-writeRuntimeConfig(coreMLRuntime);
 
 if (linuxRuntime) {
   for (const destination of linuxRuntime.runtimeDestinations) {
@@ -605,7 +551,8 @@ if (!target.includes("windows")) {
   chmodSync(workerOutput, 0o755);
 }
 
-console.log(`Staged astrlink-privacy-worker for Tauri: ${workerOutput}`);
+console.log(`Staged astrlink-privacy-worker for MyGo: ${workerOutput}`);
+stageProgram(workerOutput, "astrlink-privacy-worker");
 
 if (!reuseWindowsWorkers) {
   execFileSync(
@@ -639,8 +586,9 @@ if (!target.includes("windows")) {
 }
 
 console.log(
-  `Staged astrlink-classifier-worker for Tauri: ${classifierWorkerOutput}`,
+  `Staged astrlink-classifier-worker for MyGo: ${classifierWorkerOutput}`,
 );
+stageProgram(classifierWorkerOutput, "astrlink-classifier-worker");
 
 if (target.includes("windows")) {
   const runtimeName = "DirectML.dll";
@@ -665,5 +613,6 @@ if (target.includes("windows")) {
     throw new Error("Windows workers require the same bundled DirectML.dll.");
   }
   copyFileSync(runtimeSource, path.join(binariesDirectory, runtimeName));
+  stageResource(runtimeSource, `bin/${runtimeName}`);
   console.log(`Staged Windows ONNX Runtime dependency: ${runtimeName}`);
 }

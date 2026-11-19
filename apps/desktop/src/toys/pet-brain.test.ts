@@ -37,6 +37,7 @@ function member(over: Partial<CrewMember> = {}): CrewMember {
     waiting: false,
     queue: [],
     done: false,
+    failed: false,
     jump: 0,
     slip: 0,
     spot: null,
@@ -309,6 +310,16 @@ describe("what happens in the conversations", () => {
     expect(actOf(brain, undefined)).toBe("greet");
   });
 
+  it("does not wave or count a reply for a conversation that failed", () => {
+    const { brain, list, run } = setup([member()]);
+    run(0.5);
+    list.now = [member({ act: "wait", t: 0, failed: true })];
+    run(0.1);
+    expect(brain.wave).toBe(0);
+    expect(kinds(brain)).toEqual([]);
+    expect(brain.memo.replies).toBe(0);
+  });
+
   it("counts a reply without calling when her reply bubble is off", () => {
     const toys = defaultDesktopToys();
     cfg.prefs = { ...toys, pet: { ...toys.pet, reply: false } };
@@ -419,6 +430,16 @@ describe("what happens in the conversations", () => {
     run(0.1);
     expect(brain.client).toBe("deepseek_harness");
     expect(brain.memo.client).toBe("deepseek_harness");
+  });
+
+  it("dresses as Gemini while Gemini CLI has the most conversations", () => {
+    const { brain, run } = setup([
+      member({ id: "a", client: "codex" }),
+      member({ id: "b", client: "gemini_cli", order: 1 }),
+      member({ id: "c", client: "gemini_cli", order: 2 }),
+    ]);
+    run(0.1);
+    expect(brain.client).toBe("gemini_cli");
   });
 
   it("is DeepSeek until one of the three clients has worked", () => {
@@ -782,25 +803,25 @@ describe("her own poses", () => {
     expect(leg(far, 0)).toBe(leg(open, 0));
   });
 
-  it("draws Claude, Codex and DeepSeek from their own pictures, the same size", () => {
+  it("draws Claude, Codex, DeepSeek and Gemini from their own pictures, the same size", () => {
     const { brain } = setup();
-    const sizes = (["claude_code", "codex", "deepseek_harness"] as const).map(
-      (client) => {
-        brain.client = client;
-        const kit = kitOf(client)!;
-        expect(Object.keys(kit.faces).sort()).toEqual([
-          "blink",
-          "happy",
-          "pout",
-          "shy",
-          "sparkle",
-          "wince",
-          "wow",
-        ]);
-        expect(Object.keys(kit.clips)).toContain("held");
-        return brain.feet() - brain.top(brain.feet());
-      },
-    );
+    const sizes = (
+      ["claude_code", "codex", "deepseek_harness", "gemini_cli"] as const
+    ).map((client) => {
+      brain.client = client;
+      const kit = kitOf(client)!;
+      expect(Object.keys(kit.faces).sort()).toEqual([
+        "blink",
+        "happy",
+        "pout",
+        "shy",
+        "sparkle",
+        "wince",
+        "wow",
+      ]);
+      expect(Object.keys(kit.clips)).toContain("held");
+      return brain.feet() - brain.top(brain.feet());
+    });
     // Within two grid rows of each other.
     expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(
       2 * kitPx(),

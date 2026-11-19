@@ -20,9 +20,9 @@ user changes, applying fixes manually if crate-wide tools would change them.
 | JSON / JSONC / CSS / HTML / YAML      | `bunx prettier@3.6.2 --write <files>`                                                                                          |
 | Markdown                              | `bunx prettier@3.6.2 --write --prose-wrap always <files>`; `bunx --package markdownlint-cli@0.45.0 markdownlint --fix <files>` |
 
-Go modules: `core`, `convo`, `contracts`. Rust crates: `apps/desktop/src-tauri`,
-`apps/privacy-worker`, `apps/classifier-worker`. If Tauri needs staged sidecars,
-run `make desktop-sidecar`. For desktop TS, also run
+Go modules: `core`, `convo`, `contracts`, `apps/desktop`. Rust crates:
+`apps/privacy-worker`, `apps/classifier-worker`. If `mygo build` needs staged
+sidecars, run `make desktop-sidecar`. For desktop TS, also run
 `(cd apps/desktop && bun run typecheck)`; it does not replace linting.
 
 Recheck after fixing: `gofmt -l <files>` must print nothing; rerun `go vet`; use
@@ -83,36 +83,24 @@ using `gh`. Drafting a body does not authorize publishing it: create or edit
 GitHub issues, PRs, or comments only when the user explicitly requests that
 action.
 
-**Issues:** Read `.agents/github/ISSUE.md` before drafting an issue. Check its
-scope rules, then search `docs/guides/`, `CONTRIBUTING.md`, the README, relevant
-code, and existing issues. Answer usage, configuration, or integration questions
-from those sources instead of filing them. For an in-scope bug or feature, fill
-the agent template as the entire body; do not use the human GitHub issue forms.
-Quote the user's request faithfully, preserving its language and line breaks.
-Keep answers short and factual. Record actual behavior, impact, frequency, and
-applicable type-specific details. For features, describe the current limitation
-and use case. Ask only for required facts that cannot be established from
-available evidence, and wait before filing; do not invent answers or ask the
-user to confirm a template. If a required condition is unmet, explain it and do
-not file.
+First compare `git config user.name` and `git config user.email` with recurring
+top authors in `git log` to identify core maintainers. Do not change git config.
 
-**Pull requests:** Before drafting a PR:
+- **Core maintainers:** Skip the agent templates and their checklist, even when
+  an agent drafts on the maintainer's behalf. Write an ordinary issue; for a PR,
+  use the human template.
+- **Project-owner PRs:** Use the human template unless the owner explicitly
+  requests the agent template. The human PR templates are
+  `.github/PULL_REQUEST_TEMPLATE.md` (Chinese) and
+  `.github/PULL_REQUEST_TEMPLATE/en.md` (English).
+- **Agent templates:** For all other agent-drafted submissions, or when the
+  owner opts in for a PR, run the applicable checks in
+  `.agents/github/CHECKS.md`. If a required check fails, explain why and stop.
+  Otherwise fill `.agents/github/ISSUE.md` or `.agents/github/PR.md` as the
+  entire body.
 
-- Compare `git config user.name` and `git config user.email` with historical
-  core developers in `git log`; do not change git configuration. If the current
-  user is not a historical core developer, disclose AI-generated or AI-assisted
-  code in the body. Never add an agent as a co-author.
-- For a PR on behalf of the project owner, use
-  `.github/PULL_REQUEST_TEMPLATE.md` for Chinese requests or
-  `.github/PULL_REQUEST_TEMPLATE/en.md` for English requests, unless the owner
-  explicitly requests the agent template.
-- For other agent-created PRs, fill `.agents/github/PR.md` as the entire body.
-  Quote the user's request faithfully. Keep the body and later comments short
-  and factual; do not paste unfiltered AI-generated text.
-- Follow the selected template's issue-linking, scope, and verification rules.
-  Record commands or steps actually run and observed results; merely saying that
-  a build or tests passed is insufficient. If a required condition is unmet,
-  explain it and do not open the PR.
+If the current git user is not a core maintainer, disclose AI-generated or
+AI-assisted code in the PR body. Never add an agent as a co-author.
 
 ## Tests
 
@@ -200,16 +188,17 @@ separate toolbar.
 
 ### Use in-app dialogs
 
-On macOS, AstrLink's Tauri WebView (WKWebView via wry) does not show JavaScript
-dialogs. `window.confirm`, `window.alert`, and `window.prompt` are silent
-no-ops; **`confirm()` always returns `false`**. Save or Delete may appear to do
-nothing, or follow a false cancellation path.
+On macOS, WKWebView shows JavaScript dialogs only when its host implements them.
+The earlier Tauri shell (wry) did not: `window.confirm`, `window.alert`, and
+`window.prompt` were silent no-ops and **`confirm()` always returned `false`**,
+so Save or Delete could appear to do nothing, or follow a false cancellation
+path. MyGo shows native panels for them; do not depend on that.
 
 - Use the shared `ConfirmDialog` for confirmations. Existing in-app patterns
   include `token-dialog` / `token-dialog-backdrop` in request records, access
   tokens, and safety policy.
-- Do not add `@tauri-apps/plugin-dialog` unless the project explicitly adopts
-  that dependency.
+- Do not route confirmations through native message boxes (MyGo's or a plugin's)
+  unless the project explicitly adopts them.
 - Browser and unit tests may mock `window.confirm`; production desktop UI must
   not rely on it for real user confirmation.
 
@@ -223,6 +212,7 @@ Do not put a `/__astrlink_build` poller, `location.reload()` loop, or Cmd+R
 handler inside the frontend bundle. A top-level module error kills that script
 and hot-reload goes silent until `make dev` is restarted.
 
-The debug Rust host in `apps/desktop/src-tauri/src/dev_reload.rs` polls the
-generation endpoint and calls `webview.reload()`. Failures must log to stderr.
-The Rsbuild plugin only publishes the generation; it must not drive the reload.
+In development builds the Go host's `apps/desktop/internal/devreload`, started
+from `internal/ui/app.go`, polls the generation endpoint and reloads every page.
+Failures must log to stderr. The Rsbuild plugin only publishes the generation;
+it must not drive the reload.
