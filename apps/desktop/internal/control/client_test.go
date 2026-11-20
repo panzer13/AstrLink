@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,7 +29,23 @@ func TestTimeouts(t *testing.T) {
 		{"POST", "/control/v1/sync/run", 320 * time.Second},
 		{"GET", "/control/v1/sync/status", RequestTimeout},
 		{"PUT", "/control/v1/sync/config", RequestTimeout},
-		{"POST", "/control/v1/services/service_test/test", 75 * time.Second},
+		{"POST", "/control/v1/services/service_test/test", 320 * time.Second},
+		// Plugin hooks get room for Core's own deadline; reading and
+		// writing a plugin stays short.
+		{"POST", "/control/v1/plugins/reload", 20 * time.Second},
+		{"POST", "/control/v1/plugins/powercontext/test", 20 * time.Second},
+		{"POST", "/control/v1/plugins/powercontext/actions", 20 * time.Second},
+		{"GET", "/control/v1/plugins/powercontext/status", 20 * time.Second},
+		{"GET", "/control/v1/plugins/powercontext", RequestTimeout},
+		{"PATCH", "/control/v1/plugins/powercontext", RequestTimeout},
+		{"POST", "/control/v1/plugins/sources/preview", 200 * time.Second},
+		{"POST", "/control/v1/plugins/sources/install", 75 * time.Second},
+		{"POST", "/control/v1/plugins/hello/source/rollback", 75 * time.Second},
+		{"POST", "/control/v1/plugins/hello/ui-call", 75 * time.Second},
+		{"GET", "/control/v1/plugins/market", 75 * time.Second},
+		{"GET", "/control/v1/plugins/market?index=https%3A%2F%2Fexample.com%2Findex.json", 75 * time.Second},
+		{"GET", "/control/v1/plugins/sora/tasks?cursor=c1", 20 * time.Second},
+		{"DELETE", "/control/v1/plugins/sora/tasks", 20 * time.Second},
 		{"GET", "/control/v1/services/service_test/test", RequestTimeout},
 		{"POST", "/control/v1/services/service_test/logout", RequestTimeout},
 		{"POST", "/control/v1/pricing/refresh", 150 * time.Second},
@@ -227,5 +245,44 @@ func TestSendTurnsARefusalIntoAStatusError(t *testing.T) {
 	}
 	if response, err := Send(context.Background(), stubCaller{response: Response{Status: 204}}, Request{}); err != nil || response.Status != 204 {
 		t.Fatalf("got %+v, %v", response, err)
+	}
+}
+
+func TestDoReusesConnectionsAcrossConcurrentBursts(t *testing.T) {
+	var opened atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{}`)
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	server.Start()
+	defer server.Close()
+
+	client := NewClient()
+	const burst = 6
+	for round := 0; round < 3; round++ {
+		var started, done sync.WaitGroup
+		release := make(chan struct{})
+		for i := 0; i < burst; i++ {
+			started.Add(1)
+			done.Add(1)
+			go func() {
+				defer done.Done()
+				started.Done()
+				<-release
+				if _, err := client.Do(context.Background(), server.URL, "token", Request{Method: http.MethodGet, Path: "/control/v1/health"}); err != nil {
+					t.Error(err)
+				}
+			}()
+		}
+		started.Wait()
+		close(release)
+		done.Wait()
+	}
+	if got := opened.Load(); got > burst {
+		t.Fatalf("opened %d connections for bursts of %d; idle ones were not kept", got, burst)
 	}
 }

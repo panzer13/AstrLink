@@ -14,10 +14,14 @@ const bridgeMocks = vi.hoisted(() => ({
   getProjectMemoryEntry: vi.fn(),
   getRawSealingStatus: vi.fn(),
   getRequestAuditContent: vi.fn(),
+  getRequestConversationContent: vi.fn(),
   getRequestContextTexts: vi.fn(),
   getRequestRecord: vi.fn(),
   getRequestSession: vi.fn(),
   getRoutingSettings: vi.fn(),
+  getSessionMetadata: vi.fn(async () => ({ values: {} })),
+  getSessionPlugins: vi.fn(async () => []),
+  listMetadataAttributes: vi.fn(async () => []),
   listPrivacyModelInstallations: vi.fn(),
   listRequestRecordChildren: vi.fn(),
   listRequestRecords: vi.fn(),
@@ -420,6 +424,10 @@ describe("RequestRecords", () => {
       }
     ).IS_REACT_ACT_ENVIRONMENT = true;
     vi.clearAllMocks();
+    // The conversation reads the same content the audit mock serves.
+    bridgeMocks.getRequestConversationContent.mockImplementation((id: string) =>
+      bridgeMocks.getRequestAuditContent(id),
+    );
     window.confirm = vi.fn(() => true);
     bridgeMocks.listRequestSessions.mockResolvedValue({
       items: [sessionFromRecord(secondRecord), sessionFromRecord(firstRecord)],

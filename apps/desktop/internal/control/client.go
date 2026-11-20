@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/QuantumNous/astrlink/core/contract"
 )
 
 // Caller sends one request to Core's control API. Package core implements
@@ -30,6 +32,10 @@ type Request struct {
 	Body any
 	// IfMatch is sent as the If-Match header when it is not empty.
 	IfMatch string
+	// PluginApproved marks a change of a plugin the user confirmed in the
+	// plugin confirmation window; Core refuses a change that grants a
+	// plugin more without it.
+	PluginApproved bool
 }
 
 // Response is what Core answered.
@@ -49,10 +55,18 @@ type Client struct {
 	http *http.Client
 }
 
+// maxIdleControlConns is how many idle connections to Core are kept for
+// reuse.
+const maxIdleControlConns = 16
+
 // NewClient returns a client for Core's loopback control listener.
 func NewClient() *Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	// The pages poll several reads at once (sessions, a running session's
+	// detail, call bodies, status); Go keeps only two idle connections per
+	// host by default and closes the rest after each burst.
+	transport.MaxIdleConnsPerHost = maxIdleControlConns
 	return &Client{http: &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -114,6 +128,9 @@ func (c *Client) dispatch(ctx context.Context, url, token string, req Request, b
 	request.Header.Set("Authorization", "Bearer "+token)
 	if req.IfMatch != "" {
 		request.Header.Set("If-Match", req.IfMatch)
+	}
+	if req.PluginApproved {
+		request.Header.Set(contract.PluginApprovalHeader, "confirmed")
 	}
 	if body != nil {
 		contentType := "application/json"

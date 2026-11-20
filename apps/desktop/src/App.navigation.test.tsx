@@ -64,6 +64,7 @@ const bridgeMocks = vi.hoisted(() => ({
   getPrivacyModelInstallation: vi.fn(),
   getPrivacyPolicy: vi.fn(),
   getRequestAuditContent: vi.fn(),
+  getRequestConversationContent: vi.fn(),
   installPrivacyModel: vi.fn(),
   listAccessTokens: vi.fn(),
   listRawAccess: vi.fn().mockResolvedValue([]),
@@ -72,6 +73,7 @@ const bridgeMocks = vi.hoisted(() => ({
   getServicePackages: vi.fn().mockResolvedValue([]),
   listPrivacyModelInstallations: vi.fn(),
   listPrivacyPolicies: vi.fn(),
+  listPlugins: vi.fn(async () => ({ plugins: [] })),
   listRequestRecords: vi.fn(),
   getUsageSummary: vi.fn(),
   listRequestSessions: vi.fn(),
@@ -80,6 +82,14 @@ const bridgeMocks = vi.hoisted(() => ({
     calls: [],
   })),
   getRequestSession: vi.fn(),
+  getSessionMetadata: vi.fn(async () => ({ values: {} })),
+  getSessionPlugins: vi.fn(async () => []),
+  updatePluginHostSettings: vi.fn(async () => ({
+    paused: false,
+    injection_budget_bytes: 16384,
+    language: "zh-CN",
+  })),
+  listMetadataAttributes: vi.fn(async () => []),
   probePrivacyModel: vi.fn(),
   purgeRequestRecords: vi.fn(),
   copyAccessToken: vi.fn(),
@@ -536,6 +546,10 @@ describe("App workspace navigation", () => {
       }
     ).IS_REACT_ACT_ENVIRONMENT = true;
     vi.clearAllMocks();
+    // The conversation reads the same content the audit mock serves.
+    bridgeMocks.getRequestConversationContent.mockImplementation((id: string) =>
+      bridgeMocks.getRequestAuditContent(id),
+    );
     bridgeMocks.getLocalDataStatus.mockResolvedValue({
       unreadable_credentials: 0,
       unreadable_access_tokens: 0,
@@ -715,6 +729,7 @@ describe("App workspace navigation", () => {
       by_token: [],
       by_client: [],
       by_route: [],
+      by_plugin: [],
       scanned_records: 0,
       capped: false,
     }));
