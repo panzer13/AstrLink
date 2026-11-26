@@ -48,12 +48,14 @@ export interface PluginApproval {
 /** Where a plugin installed from source came from. */
 export interface PluginInstallSource {
   /**
-   * github; market for a plugin marketplace in new-api's index format; or
-   * directory for a version the plugin directory held, of no source.
+   * github; market for a plugin marketplace in new-api's index format; local
+   * for a folder on the computer Core runs on; or directory for a version
+   * the plugin directory held, of no source.
    */
   kind: string;
-  /** owner/name on GitHub; a marketplace's name. */
+  /** owner/name on GitHub; a marketplace's name; a local folder's name. */
   repository: string;
+  /** The link installed from; a local folder's absolute path. */
   url: string;
   /** The tag, branch or marketplace version installed; absent for a commit. */
   ref?: string;
@@ -848,8 +850,6 @@ export interface PluginHostSettings {
   web_ui?: boolean;
   /** Every plugin stays out of requests, which go out as they came. */
   paused: boolean;
-  /** What all plugins together may inject into one request. */
-  injection_budget_bytes: number;
   language: PluginLanguage;
   /** Where installs fetch packages; absent for the npm registry. */
   npm_registry?: string;
@@ -857,15 +857,10 @@ export interface PluginHostSettings {
   request_plugins: RequestPluginInstance[];
 }
 
-export const DEFAULT_INJECTION_BUDGET_BYTES = 16 * 1024;
-export const MIN_INJECTION_BUDGET_BYTES = 4 * 1024;
-export const MAX_INJECTION_BUDGET_BYTES = 64 * 1024;
-
 export interface PluginHostSettingsUpdate {
   order?: string[];
   web_ui?: boolean;
   paused?: boolean;
-  injection_budget_bytes?: number;
   language?: PluginLanguage;
   npm_registry?: string;
   /** Replaces every request processing instance. */
@@ -2209,10 +2204,6 @@ export function parsePluginHostSettings(value: unknown): PluginHostSettings {
   const settings = plugin.object(value, "$");
   return {
     paused: plugin.boolean(settings.paused, "$.paused"),
-    injection_budget_bytes: plugin.integer(
-      settings.injection_budget_bytes,
-      "$.injection_budget_bytes",
-    ),
     language: plugin.oneOf(settings.language, languages, "$.language"),
     ...(settings.order === undefined
       ? {}

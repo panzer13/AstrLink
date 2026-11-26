@@ -3266,9 +3266,9 @@
     },
     "gatewayControls": "Gateway controls",
     "today": "Today",
-    "requests": "calls",
-    "tokens": "tokens",
-    "cost": "est. cost",
+    "requests": "Calls",
+    "tokens": "Tokens",
+    "cost": "Est. cost",
     "failedCount": "{{count}} failed",
     "failedCountDetail": "{{count}} failed today. View in request records",
     "noCallsToday": "No calls yet today",
@@ -3292,7 +3292,6 @@
     "showMoreSubscriptions": "Show {{count}} more",
     "showLessSubscriptions": "Show less",
     "hourlyChart": "Tokens per hour today",
-    "hourlyPeak": "Peak {{hour}}:00 · {{tokens}}",
     "updatedAgo": "Updated {{ago}}",
     "refresh": "Refresh",
     "version": "AstrLink {{version}}",
@@ -4860,7 +4859,8 @@
       "directory": "Directory",
       "override": "Replaces built-in",
       "github": "GitHub",
-      "market": "Marketplace"
+      "market": "Marketplace",
+      "local": "Local folder"
     },
     "state": {
       "running": "Running",
@@ -5039,9 +5039,6 @@
       "pause": "Pause all plugins",
       "pauseHelp": "While paused, no plugin runs: nothing is loaded, asked or written, and requests go out as they came. The first request of each turn records why. Resume to carry on.",
       "pausedNotice": "All plugins are paused; requests go out as they came.",
-      "budget": "Plugin content limit",
-      "budgetHelp": "What all plugins add to one request stays within this. Past it, what later plugins add is dropped in processing order, and the request record says why.",
-      "budgetValue": "{{value}} KB",
       "saveFailed": "Couldn't save the settings of the plugins.",
       "open": "Plugin settings",
       "title": "Plugin settings",
@@ -5330,13 +5327,14 @@
       "description": "At each extension point the plugins run from top to bottom, each with what the one above returned."
     },
     "install": {
-      "open": "Install from GitHub",
-      "title": "Install from GitHub",
-      "helpLabel": "About installing from GitHub",
+      "open": "Install plugin",
+      "title": "Install a plugin",
+      "helpLabel": "About installing plugins",
       "helpLinks": "Paste a repository's home page (installs its newest version tag, or its default branch without tags), a branch, tag or directory under tree/, a release, or a commit. Private repositories are not supported yet.",
       "helpBuild": "AstrLink fetches the dependencies the lock file pins from npm on this computer, checks each against the lock file's hash, and builds the plugin with its own bundler, without running any install script. Dependencies with native modules cannot be used.",
       "helpConfirm": "Review the result here first; the install itself is confirmed in the plugin confirmation window. An installed plugin stays off until you enable it.",
       "link": "GitHub link",
+      "linkOrFolder": "GitHub link or local folder",
       "check": "Check",
       "previewing": "Downloading and building…",
       "failed": "This plugin cannot be installed.",
@@ -5414,7 +5412,7 @@
         "route_unsupported": "AstrLink cannot relay the route {{detail}} yet (the plugin converts it itself, or AstrLink does not serve that endpoint). It stays inactive after install."
       },
       "failures": {
-        "invalid_link": "This is not a GitHub repository link AstrLink can read.",
+        "invalid_link": "This is neither a GitHub repository link AstrLink can read nor the full path of a folder on this computer.",
         "repository_not_found": "The repository {{detail}} cannot be found, or it is private (not supported yet).",
         "ref_not_found": "The repository has no {{detail}}.",
         "rate_limited": "GitHub is limiting requests for now. Try again later.",
@@ -5432,7 +5430,8 @@
         "incompatible": "The plugin requires AstrLink {{detail}} and is not compatible with this version.",
         "expired": "The review expired. Check again.",
         "busy": "Another plugin is being built. Try again shortly.",
-        "unknown": "Could not install ({{reason}})."
+        "unknown": "Could not install ({{reason}}).",
+        "folder_not_found": "The folder {{detail}} cannot be found."
       },
       "marketRef": "Version {{version}} · verified",
       "directorySource": "The version the plugin directory held",
@@ -5449,7 +5448,11 @@
       "highRisk": "Asks for a high-risk capability: {{capability}}",
       "changelog": "Changelog",
       "marketTitle": "Install from the marketplace",
-      "updateTo": "Update to {{version}}"
+      "updateTo": "Update to {{version}}",
+      "helpFolder": "You can also choose a plugin project folder on this computer; it is built and reviewed as a GitHub install is. After you change its code, choose “Reinstall from folder” in the plugin’s ⋯ menu.",
+      "chooseFolder": "Choose folder",
+      "localSource": "Local folder",
+      "reinstallFolder": "Reinstall from folder"
     },
     "ui": {
       "switch": "Plugin interfaces",
@@ -5717,17 +5720,18 @@
     "publish": {
       "open": "Publish a plugin",
       "title": "Publish a plugin",
-      "write": "Write it",
       "docs": "Plugin API docs",
-      "share": "Publish it",
+      "copyPrompt": "Copy for AI",
+      "copied": "Copied. Paste it to your AI and say what the plugin should do",
+      "prompt": "Write a plugin for me that works in both AstrLink and New API: <describe what the plugin should do>\n\nRead New API's plugin API docs first; they are the authority:\n{{docs}}\n\nRequirements:\n1. Run `astrlink plugin new <key> --template <template>` to create the project. Use provider to connect a model service, request to check or rewrite requests, and task for async jobs such as video or images. These three produce a single plugin.js (New API's apiVersion 1 format) plus README.md and CHANGELOG.md; both products can install it, and it can be published to the New API community marketplace.\n2. Use AstrLink's own format only when New API's format cannot do the job. Its templates: {{astrlinkTemplates}}. Such a plugin runs only in AstrLink and can only be shared as a GitHub link. Tell me why New API's format cannot do it before you use one.\n3. Some ctx fields exist on one side only: channel, group, user and token only in New API; client and session only in AstrLink. Check that a field exists before using it, and keep the plugin working when it does not.\n4. Write test cases in tests/ and make `astrlink plugin test` pass; then run `astrlink plugin check` and fix everything it reports.\n5. When done, try it in AstrLink: on the Plugins page click Install plugin, then Choose folder, and pick this folder. After changing the code, use Reinstall from folder in the plugin's \"...\" menu.\n6. Push to a public GitHub repository and tag this version.\n\nWhen done, tell me which files you changed, what to set to enable it on the Plugins page, and what to fill in when publishing on the New API site.",
       "community": {
         "title": "Publish to the community marketplace",
-        "body": "Upload the plugin on the New API site to get an 8-digit plugin code. Others search the Marketplace for that code to install it.",
+        "body": "Provider and request processing plugins are written in the New API plugin format. Publish one on the New API site to get an 8-digit plugin code; others search the Marketplace for that code to install it.",
         "action": "Publish"
       },
       "github": {
         "title": "Share a GitHub link",
-        "body": "Put the plugin in a public repository. Others paste the link into Install from GitHub. Plugins under Features can only be shared this way."
+        "body": "A plugin in New API's format can be shared either way. Put it in a public repository and others paste the link into Install plugin. A plugin in AstrLink's own format can only be shared this way and runs only in AstrLink."
       }
     }
   },

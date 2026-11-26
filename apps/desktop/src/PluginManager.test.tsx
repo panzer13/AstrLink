@@ -24,6 +24,7 @@ const bridgeMocks = vi.hoisted(() => ({
   openPluginApproval: vi.fn(),
   pluginApprovalOf: vi.fn(),
   previewPluginInstall: vi.fn(),
+  pickPluginFolder: vi.fn(),
   installPlugin: vi.fn(),
   checkPluginUpdate: vi.fn(),
   rollbackPlugin: vi.fn(),
@@ -691,7 +692,6 @@ describe("PluginManager", () => {
     bridgeMocks.openPluginApproval.mockResolvedValue(true);
     bridgeMocks.getPluginHostSettings.mockResolvedValue({
       paused: false,
-      injection_budget_bytes: 16384,
       language: "zh-CN",
     });
     container = document.createElement("div");
@@ -1124,13 +1124,11 @@ describe("PluginManager", () => {
   it("orders the plugins and lists them in that order", async () => {
     bridgeMocks.getPluginHostSettings.mockResolvedValue({
       paused: false,
-      injection_budget_bytes: 16384,
       language: "zh-CN",
       order: ["team-rules"],
     });
     bridgeMocks.updatePluginHostSettings.mockImplementation(async (update) => ({
       paused: false,
-      injection_budget_bytes: 16384,
       language: "zh-CN",
       ...update,
     }));
@@ -1185,7 +1183,7 @@ describe("PluginManager", () => {
       new Error('{"error":{"code":"approval_pending","message":"waits"}}'),
     );
     await render();
-    await click(button("从 GitHub 安装"));
+    await click(button("安装插件"));
     const dialog = document.querySelector(
       '[data-testid="plugin-install-dialog"]',
     ) as HTMLElement;
@@ -1235,6 +1233,61 @@ describe("PluginManager", () => {
     ).toContain("acme/hello");
   });
 
+  const localFolder = "/Users/ada/code/hello-plugin";
+  const localReview = {
+    ...helloReview,
+    source: {
+      kind: "local",
+      repository: "hello-plugin",
+      url: localFolder,
+      commit: "",
+    },
+  };
+
+  it("installs a plugin from a folder on this computer", async () => {
+    bridgeMocks.pickPluginFolder.mockResolvedValue(localFolder);
+    bridgeMocks.previewPluginInstall.mockResolvedValue(localReview);
+    await render();
+    await click(button("安装插件"));
+    const dialog = document.querySelector(
+      '[data-testid="plugin-install-dialog"]',
+    ) as HTMLElement;
+    await click(button("选择文件夹", dialog));
+    expect(bridgeMocks.pickPluginFolder).toHaveBeenCalledWith(null);
+    expect(bridgeMocks.previewPluginInstall).toHaveBeenCalledWith(localFolder);
+    expect(
+      (document.getElementById("plugin-install-url") as HTMLInputElement).value,
+    ).toBe(localFolder);
+    const source = dialog.querySelector(
+      '[data-testid="plugin-install-source"]',
+    ) as HTMLElement;
+    expect(source.textContent).toContain("本地文件夹");
+    expect(source.textContent).toContain(localFolder);
+  });
+
+  it("reinstalls a plugin from its folder instead of checking for updates", async () => {
+    const hello = {
+      ...memory,
+      key: "hello",
+      name: "Hello",
+      source: "directory" as const,
+      installed: localReview.source,
+    };
+    bridgeMocks.listPlugins.mockResolvedValue({ ...list, plugins: [hello] });
+    bridgeMocks.getPlugin.mockResolvedValue(hello);
+    bridgeMocks.previewPluginInstall.mockResolvedValue(localReview);
+    await renderOpen("hello");
+    const heading = document.getElementById("plugin-manager-heading")
+      ?.parentElement as HTMLElement;
+    expect(heading.textContent).toContain("本地文件夹 hello-plugin");
+    await chooseMenuItem("从文件夹重新安装");
+    expect(bridgeMocks.checkPluginUpdate).not.toHaveBeenCalled();
+    expect(bridgeMocks.previewPluginInstall).toHaveBeenCalledWith(localFolder);
+    expect(
+      (document.getElementById("plugin-install-url") as HTMLInputElement).value,
+    ).toBe(localFolder);
+  });
+
   it("says why a plugin cannot be installed, with the build's messages", async () => {
     bridgeMocks.previewPluginInstall.mockRejectedValue({
       failure: {
@@ -1243,7 +1296,7 @@ describe("PluginManager", () => {
       },
     });
     await render();
-    await click(button("从 GitHub 安装"));
+    await click(button("安装插件"));
     const dialog = document.querySelector(
       '[data-testid="plugin-install-dialog"]',
     ) as HTMLElement;
@@ -1382,7 +1435,6 @@ describe("PluginManager", () => {
       '[data-testid="plugin-host-controls"]',
     );
     expect(controls?.textContent).toContain("暂停所有插件");
-    expect(controls?.textContent).toContain("插件加的内容上限");
     // A team's own marketplace and the plugin directory have their place
     // here too; the commands that write a plugin are in 发布插件.
     expect(controls?.textContent).toContain("自建市场");
@@ -1538,21 +1590,16 @@ describe("PluginManager", () => {
     });
   });
 
-  it("pauses every plugin and sets their injection budget from the header", async () => {
+  it("pauses every plugin from the header", async () => {
     bridgeMocks.updatePluginHostSettings.mockImplementation(
       async (update: Record<string, unknown>) => ({
         paused: false,
-        injection_budget_bytes: 16384,
         language: "zh-CN",
         ...update,
       }),
     );
     await render();
     await openHostSettings();
-    const controls = document.querySelector(
-      '[data-testid="plugin-host-controls"]',
-    );
-    expect(controls?.textContent).toContain("16 KB");
     expect(document.body.textContent).not.toContain("所有插件已暂停");
     await click(document.getElementById("plugin-host-pause") as HTMLElement);
     expect(bridgeMocks.updatePluginHostSettings).toHaveBeenCalledWith({
@@ -1561,11 +1608,6 @@ describe("PluginManager", () => {
     expect(document.body.textContent).toContain(
       "所有插件已暂停，请求原样发出。",
     );
-    await chooseOption("#plugin-host-budget", "32 KB");
-    await settleClosedLayer();
-    expect(bridgeMocks.updatePluginHostSettings).toHaveBeenLastCalledWith({
-      injection_budget_bytes: 32768,
-    });
   });
 
   it("voids the lookup credentials it lists only after asking", async () => {
@@ -2087,7 +2129,6 @@ describe("PluginManager", () => {
       });
       bridgeMocks.getPluginHostSettings.mockResolvedValue({
         paused: false,
-        injection_budget_bytes: 16384,
         language: "zh-CN",
         request_plugins: [
           rule("filter", "rpi_1"),
@@ -2128,7 +2169,6 @@ describe("PluginManager", () => {
       };
       bridgeMocks.getPluginHostSettings.mockResolvedValue({
         paused: false,
-        injection_budget_bytes: 16384,
         language: "zh-CN",
         request_plugins: [],
       });
@@ -2655,6 +2695,53 @@ describe("PluginManager", () => {
       expect(publish?.getAttribute("href")).toBe(
         "https://www.newapi.ai/zh/community",
       );
+    });
+
+    it("copies one prompt for both ways of sharing", async () => {
+      const writeText = vi.fn((_text: string) => Promise.resolve());
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      try {
+        await renderTasks();
+        await chooseSegment("插件市场");
+        await click(button("发布插件"));
+        const dialog = document.querySelector(
+          '[data-testid="plugin-publish-dialog"]',
+        ) as HTMLElement;
+        const github = document.querySelector(
+          '[data-testid="plugin-publish-github"]',
+        ) as HTMLElement;
+        expect(github.textContent).toContain("astrlink plugin new <key>");
+        // One prompt for both ways of sharing.
+        expect(
+          [...dialog.querySelectorAll("button")].filter(
+            (item) => item.textContent === "复制给 AI",
+          ),
+        ).toHaveLength(1);
+
+        await click(button("复制给 AI", dialog));
+        const prompt = String(writeText.mock.calls.at(-1)?.[0]);
+        expect(prompt).toContain(
+          "https://raw.githubusercontent.com/QuantumNous/new-api/main/docs/plugin-api/v1.d.ts",
+        );
+        expect(prompt).toContain("astrlink plugin new <key> --template");
+        expect(prompt).toContain("apiVersion 1");
+        expect(prompt).toContain("basic, route, stream");
+        expect(prompt).not.toContain("gate");
+        expect(prompt).toContain("astrlink plugin check");
+        expect(prompt).not.toContain("{{");
+        expect(
+          (
+            document.querySelector(
+              '[data-testid="plugin-publish-dialog"]',
+            ) as HTMLElement
+          ).textContent,
+        ).toContain("已复制，粘贴给 AI");
+      } finally {
+        Reflect.deleteProperty(navigator, "clipboard");
+      }
     });
 
     it("adds a team's own marketplace in the settings as a tab of its name", async () => {

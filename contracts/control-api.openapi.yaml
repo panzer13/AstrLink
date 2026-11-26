@@ -4321,10 +4321,16 @@ components:
       type: object
       required: [amount_usd, priced, unpriced, pending, revalued, requests]
       properties:
-        amount_usd: { type: string, pattern: '^[0-9]+\.[0-9]{9}$' }
+        amount_usd:
+          type: string
+          pattern: '^[0-9]+\.[0-9]{9}$'
+          description: Priced calls plus what the running ones have used so far.
         priced: { type: integer, minimum: 0 }
         unpriced: { type: integer, minimum: 0 }
-        pending: { type: integer, minimum: 0 }
+        pending:
+          type: integer
+          minimum: 0
+          description: Calls still running, valued at the usage they have reported so far.
         revalued: { type: integer, minimum: 0 }
         requests:
           {
@@ -7489,6 +7495,7 @@ components:
           zed,
           cherry_studio,
           goose,
+          antigravity,
         ]
       description: Best-effort client label from original inbound headers, before upstream identity rewriting. Display metadata only; never an authenticated identity. Unknown means no recognized signature. Historical records omit this field.
     RequestRecord:
@@ -8096,6 +8103,13 @@ components:
           description: Null while the call is running.
         status:
           $ref: "#/components/schemas/RequestStatus"
+        side:
+          type: boolean
+          description: >-
+            Set on a call that works for its conversation without moving it
+            on: a helper call such as a title or a check of a tool call, or a
+            summary for a compaction. The conversation's own calls tell what
+            it does; a side call's text is no answer to it.
         output:
           $ref: "#/components/schemas/OutputActivity"
         output_tokens:
@@ -8850,7 +8864,7 @@ components:
         amount_usd:
           type: string
           pattern: "^(0|[1-9][0-9]*)(\\.[0-9]{1,9})?$"
-          description: Sum of the priced attempts in US dollars.
+          description: Sum of the priced attempts in US dollars, plus what the running ones have used so far.
         priced: { type: integer, minimum: 0 }
         unpriced:
           type: integer
@@ -8859,7 +8873,7 @@ components:
         pending:
           type: integer
           minimum: 0
-          description: Attempts still running.
+          description: Attempts still running, valued at the usage they have reported so far.
       additionalProperties: false
     SessionContext:
       type: object

@@ -15,6 +15,39 @@ AstrLink 负责机制：时间和内存上限、存储、确认，以及把插�
 函数和标准的 Web
 API，还能用 Node 的大部分内置模块，网络可以访问任何地址。它碰不到的是：插件自己目录以外的文件、子进程和线程、网关的端口、网关的环境变量，以及网关替它保存的密钥。插件声明的能力在安装审查里列出，启用插件即全部生效。
 
+## 选哪种格式
+
+AstrLink 和 [New API](https://github.com/QuantumNous/new-api) 共用 New
+API 的插件格式（[插件接口 v1](https://github.com/QuantumNous/new-api/blob/main/docs/plugin-api/v1.md)）：一个
+`plugin.js`，旁边放 `README.md` 和 `CHANGELOG.md`。两个网关都能做的事都用它写：
+
+- 接入模型服务：provider 部分
+- 检查或改写请求，检查或遮盖回复：请求处理部分，钩子有
+  `ingress`、`outbound`、`egress`、`reply` 和 `report`
+- 视频、图片这类异步任务：任务插件
+
+这样的插件两边都能装，也能发布到 New API 社区市场。`astrlink plugin new` 的
+`request`、`provider`、`task` 模板生成这种项目。
+
+本文主要讲 AstrLink 自己的格式。它只用于 New API 没有的功能：
+
+- 会话上下文注入、路由、改写回复
+- 界面、定时任务、HTTP 接口、给模型用的工具
+
+这种插件只有 AstrLink 能用，只能分享 GitHub 链接。
+
+### 只有一边有的字段
+
+请求处理部分的钩子收到的 `ctx` 里，有些字段只有一个网关提供：
+
+| 字段                                                | 提供方   | 内容                                                      |
+| --------------------------------------------------- | -------- | --------------------------------------------------------- |
+| `ctx.channel`、`ctx.group`、`ctx.user`、`ctx.token` | New API  | 渠道、用户分组、用户和令牌                                |
+| `ctx.client`                                        | AstrLink | 识别出的客户端，如 `claude_code`、`codex`；识别不出时没有 |
+| `ctx.session`                                       | AstrLink | 请求所在的会话 `{ id, turn }`；不属于任何会话时没有       |
+
+插件用到这些字段前先判断在不在，不在时也要能工作。
+
 ## 写一个插件
 
 最简单的插件是一个文件：导出清单 `meta`
@@ -43,15 +76,15 @@ MiB。`engines.astrlink`
 命令行 `astrlink plugin`
 和 Core 用同一套构建器，本机构建的结果和用户安装时一致：
 
-| 命令                        | 做什么                                                                                                                 |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `astrlink plugin new <key>` | 从模板起项目：`basic`、`files`、`gate`、`route`、`forward`、`stream`、`response`、`schedule`、`http`、`provider`、`ui` |
-| `astrlink plugin build`     | 构建出 `plugin.js`、`client.js` 和 source map                                                                          |
-| `astrlink plugin check`     | 构建并在 moejs 里编译，检查清单、能力和不该用的 API                                                                    |
-| `astrlink plugin test`      | 按 `tests/` 里的用例跑钩子，可以伪造存储、网络应答和时钟                                                               |
-| `astrlink plugin dev`       | 监听改动、构建，装进本机 AstrLink 的插件目录并实时输出日志                                                             |
+| 命令                        | 做什么                                                                                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `astrlink plugin new <key>` | 从模板起项目。New API 格式：`request`（默认）、`provider`、`task`；AstrLink 格式：`basic`、`files`、`route`、`stream`、`response`、`schedule`、`http`、`ui` |
+| `astrlink plugin build`     | 构建出 `plugin.js`、`client.js` 和 source map                                                                                                               |
+| `astrlink plugin check`     | 构建并在 moejs 里编译，检查清单、能力和不该用的 API                                                                                                         |
+| `astrlink plugin test`      | 按 `tests/` 里的用例跑钩子，可以伪造存储、网络应答和时钟                                                                                                    |
+| `astrlink plugin dev`       | 监听改动、构建，装进本机 AstrLink 的插件目录并实时输出日志                                                                                                  |
 
-`astrlink plugin new` 会把类型定义放进项目：后端是
+AstrLink 格式的模板会把类型定义放进项目：后端是
 [astrlink-plugin.d.ts](../../core/plugins/astrlink-plugin.d.ts)，界面是
 [astrlink-plugin-client.d.ts](../../core/plugins/astrlink-plugin-client.d.ts)。下文说到的字段以它们为准。
 
@@ -80,6 +113,16 @@ MiB。`engines.astrlink`
   `install.json` 记下仓库、提交、子目录、锁文件和构建产物的哈希。
 - 「检查更新」看同一个仓库：装的是标签就看同一前缀的新版本标签（显示 Release 说明），装的是分支就看分支的新提交，装的是固定提交就不跟随。更新同样经过审查和确认，审查里写明新增和去掉的能力、界面代码、联网用途和依赖的变化。
 - 被替换的版本保留最近 3 个，可以回滚；回滚也要确认。卸载会删掉插件文件和保留的版本，插件的设置、存储的数据和数据目录里的文件保留，再装回来时先停用；替换过内置插件的，卸载后内置插件恢复。
+
+## 从本地文件夹安装
+
+桌面版「安装插件」里点「选择文件夹」，选本机的插件项目：
+
+- 构建、依赖、审查和确认都和从 GitHub 安装一样。依赖照样按锁文件从 npm 下载，不用项目里的
+  `node_modules`。
+- `install.json`
+  记下文件夹的路径。本地装的插件没有「检查更新」，改了代码后在「⋯」菜单里点「从文件夹重新安装」，重新构建和审查。
+- 边改边看日志用 `astrlink plugin dev`。
 
 ## 清单 meta
 
@@ -736,7 +779,7 @@ astrlink plugin test plugin.js --fixture golden.json
   `Proxy-*`、`X-AstrLink-*`，由网关去掉。插件没设 `User-Agent`
   时不发送；不跟随重定向，3xx 原样返回。
 - 请求体用 `json`（作为 `application/json` 发送）或 `body`，不能同时有，`GET`
-  不带请求体，最多 1 MiB。
+  不带请求体，最多 64 MiB。
 - 传数组时并行执行，一次最多 8 个；v1 的每次钩子调用最多 16 个，v2 的最多 32 个，可以用
   `Promise.all`
   同时等。单个请求默认 10 秒超时，最多 30 秒，钩子的时间上限会更早截止。等网络的时间不计入脚本时间。
@@ -747,7 +790,7 @@ astrlink plugin test plugin.js --fixture golden.json
   `TypeError`，网关拒绝或按它的规则失败的（见下面的 `error`）在
   `error.cause.code` 里给出原因。
 - 响应：`status`（没收到响应时为 0）、`headers`（每个头的第一个值，键是小写）、`json`
-  或 `text`（最多 1 MiB）、`took_ms`，以及出错时的
+  或 `text`（最多 64 MiB）、`took_ms`，以及出错时的
   `error`：`denied`（凭据不能发往这个地址）、`timeout`、`network`、`too_large`、`budget`。HTTP 错误码照常返回，不算
   `error`。
 
@@ -766,16 +809,16 @@ astrlink plugin test plugin.js --fixture golden.json
 
 ## 运行限制
 
-| 项       | 限制                                                               |
-| -------- | ------------------------------------------------------------------ |
-| 脚本时间 | 每次调用 200 ms，等网络、存储和定时器的时间不计；供应商适配器 1 秒 |
-| 内存     | 运行时保留的内存 32 MiB，随用随丢的不算；供应商适配器 256 MiB      |
-| 返回值   | 最多 64 KiB、4096 个值；供应商适配器 64 MiB                        |
-| 定时器   | v2 每次调用同时最多 64 个，调用结束时一并取消                      |
-| 时间上限 | 每个扩展点各自的上限，见「扩展点」                                 |
-| 文件     | 数据目录最多 1 GiB；同时打开的文件最多 256 个                      |
-| 动态代码 | `eval` 和 `new Function` 一次最多编译 1 MiB 的源码                 |
-| 内置对象 | 每个运行时一份，插件可以修改，不影响别的插件                       |
+| 项       | 限制                                               |
+| -------- | -------------------------------------------------- |
+| 脚本时间 | 每次调用 5 秒，等网络、存储和定时器的时间不计      |
+| 内存     | 运行时保留的内存 512 MiB，随用随丢的不算           |
+| 返回值   | 最多 64 MiB、4,194,304 个值                        |
+| 定时器   | v2 每次调用同时最多 64 个，调用结束时一并取消      |
+| 时间上限 | 每个扩展点各自的上限，见「扩展点」                 |
+| 文件     | 数据目录最多 1 GiB；同时打开的文件最多 256 个      |
+| 动态代码 | `eval` 和 `new Function` 一次最多编译 1 MiB 的源码 |
+| 内置对象 | 每个运行时一份，插件可以修改，不影响别的插件       |
 
 超出限制时，这次调用的结果被丢弃，请求照常进行。出错的运行时不会再被使用，下次调用用新的。
 

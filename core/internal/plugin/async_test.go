@@ -534,7 +534,7 @@ export async function prepareTurn() {
   return [whole, streamed, fits];
 }
 `),
-	}, settingsMap{"demo": enabled(CapabilityNetwork)}, Services{Fetcher: fetcher}, Limits{})
+	}, settingsMap{"demo": enabled(CapabilityNetwork)}, Services{Fetcher: fetcher}, Limits{FetchBodyBytes: 1 << 20})
 	outcome := callWithin(t, context.Background(), loadedPlugin(t, manager, "demo"), HookPrepareTurn, nil, CallOptions{NetworkBudget: 5 * time.Second})
 	var result []any
 	if outcome.err != nil || json.Unmarshal(outcome.result, &result) != nil || len(result) != 3 {
@@ -542,10 +542,10 @@ export async function prepareTurn() {
 	}
 	for _, failed := range result[:2] {
 		if text, _ := failed.(string); !strings.HasPrefix(text, "TypeError: fetch failed") || !strings.Contains(text, "larger than 1 MiB") {
-			t.Errorf("a body past 1 MiB = %v", failed)
+			t.Errorf("a body past the limit = %v", failed)
 		}
 	}
 	if result[2] != float64(204) || requests.Load() != 1 {
-		t.Fatalf("a body of 1 MiB = %v after %d requests", result[2], requests.Load())
+		t.Fatalf("a body at the limit = %v after %d requests", result[2], requests.Load())
 	}
 }

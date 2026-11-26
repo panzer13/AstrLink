@@ -198,6 +198,9 @@ type Limits struct {
 	// length, and the number of values in it.
 	ResultBytes int
 	ResultNodes int
+	// FetchBodyBytes bounds the body of a request the call sends, by
+	// astrlink.http.fetch or fetch.
+	FetchBodyBytes int
 	// Concurrency is how many calls of one plugin may run JavaScript at the
 	// same time. A call waiting on the host gives up its place meanwhile.
 	Concurrency int
@@ -205,16 +208,21 @@ type Limits struct {
 	DataBytes int64
 }
 
-// DefaultLimits are the limits of the design: 200 ms of JavaScript, 32 MiB,
-// and a result of at most 64 KiB and 4096 values.
+// DefaultLimits are the limits of every hook call. A hook may take and
+// return a whole request or response, as large as the gateway lets one be,
+// so it gets 5 s of JavaScript, 512 MiB, and a result of at most 64 MiB and
+// 4 Mi values. The extension points' own time limits bound it further.
 func DefaultLimits() Limits {
 	return Limits{
-		ScriptTime:  200 * time.Millisecond,
-		Memory:      32 << 20,
-		ResultBytes: 64 << 10,
-		ResultNodes: 4096,
-		Concurrency: runtime.GOMAXPROCS(0),
-		DataBytes:   DefaultDataBytes,
+		ScriptTime:  5 * time.Second,
+		Memory:      512 << 20,
+		ResultBytes: 64 << 20,
+		ResultNodes: 4 << 20,
+		// FetchBodyBytes is MaxFetchBodyBytes: a plugin may send a whole
+		// model request, as a hook may return one.
+		FetchBodyBytes: MaxFetchBodyBytes,
+		Concurrency:    runtime.GOMAXPROCS(0),
+		DataBytes:      DefaultDataBytes,
 	}
 }
 
@@ -231,6 +239,9 @@ func (limits Limits) withDefaults() Limits {
 	}
 	if limits.ResultNodes <= 0 {
 		limits.ResultNodes = defaults.ResultNodes
+	}
+	if limits.FetchBodyBytes <= 0 {
+		limits.FetchBodyBytes = defaults.FetchBodyBytes
 	}
 	if limits.Concurrency <= 0 {
 		limits.Concurrency = defaults.Concurrency
